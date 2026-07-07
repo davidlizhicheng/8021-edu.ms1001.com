@@ -1,0 +1,20 @@
+services:
+  gaokao-ai:
+    build: .
+    container_name: gaokao-ai
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8020:8020"
+    volumes:
+      - ./data:/app/data
+      - ./web/uploads:/app/web/uploads
+      - ./web/cards:/app/web/cards
+      - ./web/exports:/app/web/exports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/healthz', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

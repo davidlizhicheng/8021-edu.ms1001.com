@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>在线生成3（测试）· AiPPT 预装版</title>
+    <link rel="stylesheet" href="/styles.css?v=20260625c" />
+    <link rel="stylesheet" href="/shell.css?v=1" />
+    <script src="https://api-static.aippt.cn/aippt-iframe-sdk.js"></script>
+    <style>
+      .aippt-page { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+      .aippt-toolbar {
+        display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+        padding: 16px 20px; border-bottom: 1px solid rgba(0,0,0,.08); background: #fff;
+      }
+      .aippt-toolbar h1 { margin: 0; font-size: 1.15rem; }
+      .aippt-toolbar p { margin: 4px 0 0; color: var(--ink-2); font-size: 0.88rem; }
+      #aipptContainer { width: 100%; min-height: calc(100vh - 72px); background: #f6f7fb; }
+      .aippt-status { padding: 24px; color: var(--ink-2); }
+    </style>
+  </head>
+  <body class="aippt-page">
+    <header class="aippt-toolbar">
+      <div>
+        <h1>在线生成3（测试）</h1>
+        <p>AiPPT 预装版 · PC 端 iframe · 密钥由服务端鉴权换取 code</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="ghost-btn" href="/" style="text-decoration:none">返回 edu 首页</a>
+        <button class="ghost-btn" id="reloadBtn" type="button">重新加载</button>
+        <button class="secondary-btn" id="deleteBtn" type="button">关闭 iframe</button>
+      </div>
+    </header>
+    <div id="aipptContainer">
+      <p class="aippt-status" id="statusText">正在向服务端申请 AiPPT 授权 code…</p>
+    </div>
+    <script>
+      const statusEl = document.getElementById("statusText");
+      const container = document.getElementById("aipptContainer");
+
+      async function bootAippt() {
+        statusEl.textContent = "正在向服务端申请 AiPPT 授权 code…";
+        statusEl.classList.remove("hidden");
+        try {
+          const resp = await fetch("/api/aippt/code");
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) {
+            throw new Error(data.error || "鉴权失败");
+          }
+          statusEl.classList.add("hidden");
+          await AipptIframe.show({
+            appkey: data.appkey,
+            channel: data.channel,
+            code: data.code,
+            isMobile: false,
+            container,
+            editorModel: true,
+            routerOptions: {
+              list: ["workspace", "generate", "editor"],
+            },
+            options: {
+              fc_plate: [20011, 2002, 2003, 2011, 2014, 2024],
+            },
+            onMessage(type, payload) {
+              console.log("[AiPPT]", type, payload);
+              if (type === "SCENE_AUTH") {
+                AipptIframe.sceneAuthContinue(true);
+              }
+            },
+          });
+        } catch (err) {
+          statusEl.textContent = err.message || String(err);
+          statusEl.classList.remove("hidden");
+        }
+      }
+
+      document.getElementById("reloadBtn").addEventListener("click", async () => {
+        try { AipptIframe.deleteIframe?.(); } catch (_) {}
+        container.innerHTML = '<p class="aippt-status" id="statusText">正在重新加载…</p>';
+        await bootAippt();
+      });
+      document.getElementById("deleteBtn").addEventListener("click", () => {
+        try { AipptIframe.deleteIframe(); } catch (_) {}
+        container.innerHTML = '<p class="aippt-status">iframe 已关闭，点击「重新加载」恢复。</p>';
+      });
+      bootAippt();
+    </script>
+  </body>
+</html>

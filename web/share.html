@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>学习状态共享｜AI错题拆博士</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/share.css?v=20260701auth1" />
+  </head>
+  <body>
+    <main class="share-shell">
+      <section class="share-hero">
+        <div>
+          <p class="eyebrow">Tutor Share</p>
+          <h1 id="shareTitle">学习状态共享</h1>
+          <p id="shareMeta">正在读取共享链接...</p>
+        </div>
+        <div class="share-brand">AI错题拆博士</div>
+      </section>
+
+      <section id="shareError" class="share-error hidden"></section>
+
+      <section id="shareContent" class="hidden">
+        <div class="metric-grid" id="summaryCards"></div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Subject Archive</p>
+              <h2>分科学习状态</h2>
+            </div>
+          </div>
+          <div id="subjectGrid" class="subject-grid"></div>
+        </section>
+
+        <section class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">Weak Patterns</p><h2>常见题型</h2></div></div>
+            <div id="weakList" class="rank-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><p class="eyebrow">Error Causes</p><h2>结构化错因</h2></div></div>
+            <div id="errorList" class="rank-list"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Recent Questions</p>
+              <h2>近期错题与训练状态</h2>
+            </div>
+          </div>
+          <div id="questionList" class="question-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2>最近生成记录</h2>
+            </div>
+          </div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+      </section>
+    </main>
+    <script defer src="/share.js?v=20260701auth1"></script>
+  </body>
+</html>

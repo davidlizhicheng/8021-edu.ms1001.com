@@ -1,0 +1,1068 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI错题拆博士®---AI中高考错题难题拆解提分博士</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css?v=20260701auth1" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">博</div>
+          <div>
+            <strong>AI错题拆博士<sup class="brand-reg">®</sup></strong>
+            <span>AI中高考错题难题拆解提分博士</span>
+          </div>
+        </div>
+
+        <div class="sidebar-body">
+        <nav class="nav">
+          <button class="nav-item active" data-view="portal">
+            <span class="nav-icon">00</span>
+            <span>工具门户</span>
+          </button>
+          <button class="nav-item nav-core" data-view="diagnose">
+            <span class="nav-icon">01</span>
+            <span>错题拆解</span>
+            <span class="nav-badge">核心</span>
+          </button>
+          <button class="nav-item nav-agent" data-view="agent">
+            <span class="nav-icon">AI</span>
+            <span>解题智能体</span>
+            <span class="nav-badge">分层</span>
+          </button>
+          <button class="nav-item" data-view="library">
+            <span class="nav-icon">02</span>
+            <span>我的错题本</span>
+          </button>
+          <button class="nav-item" data-view="tool" data-student-hide>
+            <span class="nav-icon">03</span>
+            <span>通用工具</span>
+          </button>
+          <button class="nav-item" data-view="history" data-student-hide>
+            <span class="nav-icon">04</span>
+            <span>生成历史</span>
+          </button>
+          <button class="nav-item" data-view="report">
+            <span class="nav-icon">05</span>
+            <span>能力报告</span>
+          </button>
+          <button class="nav-item" data-view="profile">
+            <span class="nav-icon">06</span>
+            <span>个人档案</span>
+          </button>
+          <button class="nav-item" data-view="mothers" data-student-hide>
+            <span class="nav-icon">07</span>
+            <span>母题预留</span>
+          </button>
+          <button class="nav-item hidden" id="adminNavItem" data-view="admin">
+            <span class="nav-icon">08</span>
+            <span>后台配置</span>
+          </button>
+        </nav>
+
+        <div class="side-note">
+          <span>产品说明</span>
+          <strong>全科错题拆解 · 真 OCR · 多模型</strong>
+          <p>支持图片、PDF、Word 上传；覆盖全学段错题难题拆解、多解路径、巩固题与学习卡片。</p>
+          <p class="trademark-note">拆博士<sup class="brand-reg">®</sup> 为本平台注册商标标识</p>
+        </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">AI错题拆博士<sup class="brand-reg">®</sup> v0.2</p>
+            <h1 class="brand-headline">AI错题拆博士<sup class="brand-reg">®</sup>---AI中高考错题难题拆解提分博士</h1>
+            <p class="topbar-subtitle">一个平台，装下全学段AI 学习工具箱，支持你冲击中高考。</p>
+            <div class="tech-ribbon">
+              <span class="tech-ribbon-core">错题拆解闭环</span>
+              <span>视觉 OCR</span>
+              <span>巩固过关</span>
+              <span>我的错题本</span>
+              <span>学习档案</span>
+            </div>
+          </div>
+          <div class="model-switch">
+            <label class="student-mode-toggle" title="隐藏通用工具，聚焦错题闭环">
+              <input id="studentModeToggle" type="checkbox" checked />
+              <span>学生模式</span>
+            </label>
+            <label for="modelSelect">拆题模型</label>
+            <select id="modelSelect"></select>
+          </div>
+        </header>
+
+        <section id="view-portal" class="view active">
+          <section class="panel portal-spotlight">
+            <div class="portal-spotlight-inner">
+              <p class="eyebrow">核心能力 · 错题突破</p>
+              <h2 class="portal-spotlight-title">上传一道错题，<strong>4 步闭环</strong>拆到会、练到会</h2>
+              <p class="portal-spotlight-lead">OCR 识题 → 超细拆题与错因诊断 → 三道巩固变式 + AI 批改过关 → 自动沉淀错题本与学习档案。对标一线教师工作流，错题能力置于首页最显著位置。</p>
+              <div class="portal-spotlight-stats">
+                <span>真 OCR 识题</span>
+                <span>多解路径</span>
+                <span>巩固过关</span>
+                <span>22 项工具</span>
+              </div>
+              <div class="portal-actions portal-spotlight-actions">
+                <button id="portalStartBtn" class="primary-btn primary-btn-lg" type="button">立即开始错题拆解</button>
+                <button id="portalLibraryBtn" class="secondary-btn" type="button">我的错题本</button>
+                <button id="contactBtn" class="ghost-btn" type="button">联系我们</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel wrong-loop-panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Wrong Question Loop</p>
+                <h2>错题拆解闭环</h2>
+                <p class="section-subtitle">平台核心能力：从一道错题出发，完成拆解、训练与沉淀。</p>
+              </div>
+            </div>
+            <div class="wrong-loop-grid">
+              <button class="wrong-loop-step" type="button" data-goto-view="diagnose">
+                <span class="wrong-loop-number">01</span>
+                <strong>上传错题</strong>
+                <small>图片 OCR / 文件 / 粘贴题干与错解</small>
+              </button>
+              <button class="wrong-loop-step" type="button" data-goto-view="diagnose">
+                <span class="wrong-loop-number">02</span>
+                <strong>超细拆题</strong>
+                <small>错因诊断、多解路径、母题雏形与小诗复盘</small>
+              </button>
+              <button class="wrong-loop-step" type="button" data-goto-view="diagnose">
+                <span class="wrong-loop-number">03</span>
+                <strong>巩固过关</strong>
+                <small>三道变式题 + AI 批改，过关后移出错题本</small>
+              </button>
+              <button class="wrong-loop-step" type="button" data-goto-view="library">
+                <span class="wrong-loop-number">04</span>
+                <strong>沉淀错题本</strong>
+                <small>分科归档、回看拆解、导出个人学习档案</small>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel today-panel" id="todayPanel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Today</p>
+                <h2>今日待过关</h2>
+                <p class="section-subtitle">优先处理待训练与需复核的错题，巩固过关后自动移出待办。</p>
+              </div>
+              <button id="refreshTodayBtn" class="ghost-btn" type="button">刷新</button>
+            </div>
+            <div id="todaySummary" class="today-grid"></div>
+            <div id="todayList" class="today-list"></div>
+          </section>
+
+          <section class="portal-hero panel portal-hero-compact">
+            <div>
+              <p class="eyebrow">AI错题拆博士<sup class="brand-reg">®</sup></p>
+              <h2 class="portal-hero-brand">全科 AI 教学工具箱</h2>
+              <p class="section-subtitle">除错题拆解外，还提供文档整理、命题训练、课件辅助等工具；登录后同步积分与生成历史。</p>
+            </div>
+            <div class="account-card" id="accountCard">
+              <span class="tag muted">每个工具可先试用</span>
+              <h3 id="accountTitle">未登录</h3>
+              <p id="accountDesc">登录后可同步积分、兑换权益，并把生成成果沉淀到历史记录。</p>
+              <div class="account-actions" id="accountActions"></div>
+            </div>
+          </section>
+
+          <section class="panel portal-tools-panel" data-student-hide>
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Tool Matrix</p>
+                <h2>全科智能工具矩阵</h2>
+                <p class="section-subtitle">错题拆解置顶；另有文档整理、命题训练、课件辅助等 21 项工具。</p>
+              </div>
+              <div class="portal-filter" id="portalCategoryFilter"></div>
+            </div>
+            <div id="portalToolGrid" class="portal-tool-grid"></div>
+          </section>
+        </section>
+
+
+        <section id="view-agent" class="view">
+          <section class="panel agent-command-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Gaokao Agent</p>
+                <h2>高考全科解题智能体</h2>
+                <p class="section-subtitle">从输入识别到档案沉淀，按 11 层工作流完成拆题、解题、多解、错因诊断、训练生成和复盘。</p>
+              </div>
+              <span class="tag warm">分层推理</span>
+            </div>
+
+            <div class="agent-topology" id="agentLayerRail"></div>
+
+            <div class="agent-workbench-grid">
+              <div class="agent-input-stack">
+                <div class="agent-input-card">
+                  <div class="agent-card-head">
+                    <span>01</span>
+                    <strong>输入题目与作答</strong>
+                  </div>
+                  <label class="field compact-field">
+                    <span>学科/场景</span>
+                    <select id="agentSubjectInput" class="text-input">
+                      <option value="自动识别">自动识别</option>
+                      <option value="高中数学">高中数学</option>
+                      <option value="高中物理">高中物理</option>
+                      <option value="高中化学">高中化学</option>
+                      <option value="高中生物">高中生物</option>
+                      <option value="高中语文">高中语文</option>
+                      <option value="高中英语">高中英语</option>
+                      <option value="高中政治">高中政治</option>
+                      <option value="高中历史">高中历史</option>
+                      <option value="高中地理">高中地理</option>
+                      <option value="其他学科">其他学科</option>
+                    </select>
+                  </label>
+                  <div class="file-ingest agent-upload" data-target="agentQuestionInput" data-answer-target="agentStudentAnswerInput" data-ocr="true">
+                    <label class="file-dropzone" for="agentFileInput">
+                      <input id="agentFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                      <span class="drop-icon">↑</span>
+                      <strong>上传图片 / PDF / Word，或直接粘贴到下方</strong>
+                      <small>图片会先走 OCR；若识别出学生作答或批注，会自动写入作答区。</small>
+                    </label>
+                    <ul class="file-ingest-list" id="agentFileList"></ul>
+                  </div>
+                  <label class="field">
+                    <span>题目内容</span>
+                    <textarea id="agentQuestionInput" rows="8" placeholder="粘贴题干、材料、选项、图表文字，或上传文件后在这里校准。"></textarea>
+                  </label>
+                  <label class="field">
+                    <span>学生作答 / 批注 / 卡点</span>
+                    <textarea id="agentStudentAnswerInput" rows="5" placeholder="可选：粘贴学生答案、错误步骤、老师批注、红叉原因或学生说不会的地方。"></textarea>
+                  </label>
+                  <div class="agent-actions">
+                    <button id="runAgentBtn" class="primary-btn" type="button">启动分层解题</button>
+                    <button id="agentSampleBtn" class="ghost-btn" type="button">填入样例</button>
+                  </div>
+                </div>
+
+                <div class="agent-input-card rag-control-card">
+                  <div class="agent-card-head">
+                    <span>R</span>
+                    <strong>RAG 知识库</strong>
+                  </div>
+                  <label class="student-mode-toggle rag-toggle" title="开启后，智能体会先检索本地资料，再带证据解题。">
+                    <input id="agentUseRagToggle" type="checkbox" checked />
+                    <span>启用 RAG 检索增强</span>
+                  </label>
+                  <label class="file-dropzone rag-dropzone" for="ragFileInput">
+                    <input id="ragFileInput" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv,.json" />
+                    <span class="drop-icon">+</span>
+                    <strong>上传教材、讲义、错题总结</strong>
+                    <small>支持 PDF、Word(.docx)、TXT、Markdown；入库后会自动切块检索。</small>
+                  </label>
+                  <label class="field compact-field">
+                    <span>资料标题</span>
+                    <input id="ragTitleInput" class="text-input" placeholder="可选：如 导数压轴题模型" />
+                  </label>
+                  <label class="field">
+                    <span>也可直接粘贴资料</span>
+                    <textarea id="ragPasteInput" rows="4" placeholder="粘贴知识点、母题模型、课堂笔记、评分标准等。"></textarea>
+                  </label>
+                  <div class="agent-actions">
+                    <button id="saveRagDocBtn" class="secondary-btn" type="button">资料入库</button>
+                    <button id="searchRagBtn" class="ghost-btn" type="button">检索当前题</button>
+                  </div>
+                  <div class="agent-actions">
+                    <button id="generateRagQuizBtn" class="secondary-btn" type="button">RAG 自我出卷</button>
+                    <button id="buildRagStudyBtn" class="ghost-btn" type="button">生成自学OS</button>
+                  </div>
+                  <div id="ragLibrarySummary" class="rag-library-summary">知识库等待加载。</div>
+                  <div id="ragHitList" class="rag-hit-list"></div>
+                  <div id="ragStudyPanel" class="rag-study-panel"></div>
+                </div>
+
+                <div class="agent-input-card agent-principle-card">
+                  <div class="agent-card-head">
+                    <span>02</span>
+                    <strong>产品原则</strong>
+                  </div>
+                  <div class="agent-principles">
+                    <span>先拆解，再求解</span>
+                    <span>先降阶，再迁移</span>
+                    <span>先诊断，再训练</span>
+                    <span>结果进入历史</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="agent-output-stack">
+                <div class="agent-result-panel hidden" id="agentResultPanel">
+                  <div class="agent-result-head">
+                    <div>
+                      <p class="eyebrow">Agent Result</p>
+                      <h3 id="agentResultTitle">等待生成</h3>
+                      <small id="agentResultMeta"></small>
+                    </div>
+                    <button id="copyAgentResultBtn" class="ghost-btn" type="button">复制结果</button>
+                  </div>
+                  <div id="agentQuickCards" class="agent-quick-grid"></div>
+                  <div class="agent-result-grid">
+                    <article>
+                      <span>标准答案</span>
+                      <p id="agentFinalAnswer"></p>
+                    </article>
+                    <article>
+                      <span>解题模型</span>
+                      <p id="agentSolutionModel"></p>
+                    </article>
+                  </div>
+
+                  <div class="agent-section" id="agentRagSection">
+                    <h4>RAG 检索证据</h4>
+                    <div id="agentRagCitations" class="rag-citation-list"></div>
+                  </div>
+                  <div class="agent-section">
+                    <h4>规范解析</h4>
+                    <div id="agentStandardSolution" class="agent-rich-text"></div>
+                  </div>
+                  <div class="agent-section">
+                    <h4>一题多解 / 多视角</h4>
+                    <div id="agentMultiSolutions" class="agent-card-list"></div>
+                  </div>
+                  <div class="agent-section">
+                    <h4>同类训练</h4>
+                    <div id="agentTrainingList" class="agent-card-list"></div>
+                  </div>
+                  <div class="agent-section agent-poem-box">
+                    <h4 id="agentPoemTitle">复盘小诗</h4>
+                    <div id="agentPoem"></div>
+                  </div>
+                </div>
+
+                <div class="agent-layer-grid" id="agentLayerGrid"></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-tool" class="view">
+          <section class="panel tool-workbench">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Universal Tool Runner</p>
+                <h2 id="toolRunnerTitle">通用工具工作台</h2>
+                <p id="toolRunnerSubtitle" class="section-subtitle">从工具门户选择一个工具，输入材料后即可生成。</p>
+              </div>
+              <span id="toolRunnerBadge" class="tag muted">AI工具</span>
+            </div>
+            <div class="tool-runner-grid">
+              <div>
+                <label class="field compact-field">
+                  <span>当前工具</span>
+                  <select id="toolSelect" class="text-input"></select>
+                </label>
+                <label class="field">
+                  <span>学科/场景</span>
+                  <input id="toolSubjectInput" class="text-input" value="自动识别" />
+                </label>
+                <label class="field">
+                  <span>输入材料</span>
+                  <div class="file-ingest" data-target="toolInput" data-ocr="true">
+                    <label class="file-dropzone" for="toolFileInput">
+                      <input id="toolFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                      <span class="drop-icon">↑</span>
+                      <strong>点击选择文件，或拖拽到此处</strong>
+                      <small>支持 PDF、Word(.docx)、TXT、Markdown、CSV、图片；可多选，自动解析写入下方文本框</small>
+                    </label>
+                    <ul class="file-ingest-list" id="toolFileList"></ul>
+                  </div>
+                  <textarea id="toolInput" rows="14" placeholder="粘贴或上传题目、试卷、知识点、作文、课堂材料、学生作答或备课需求。支持 PDF、Word(.docx)、TXT、Markdown 与图片。"></textarea>
+                </label>
+                <button id="runToolBtn" class="primary-btn" type="button">生成并下载成品</button>
+              </div>
+              <div class="tool-output-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="eyebrow">Output</p>
+                    <h3>生成结果</h3>
+                  </div>
+                  <div class="tool-output-actions">
+                    <button id="copyToolOutputBtn" class="ghost-btn" type="button">复制</button>
+                  </div>
+                </div>
+                <div id="toolReportPanel" class="tool-report-panel hidden"></div>
+                <div id="toolArtifacts" class="tool-artifacts hidden"></div>
+                <pre id="toolOutput" class="tool-output">选择工具并输入材料后，结果会显示在这里，并自动生成 Word / PPT / 图片等可下载文件。</pre>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-history" class="view">
+          <section class="panel history-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Generation Ledger</p>
+                <h2>生成历史</h2>
+                <p class="section-subtitle">OCR拆题、变式题、AI批改、学习卡片、通用工具输出、个人档案导出，都会在这里留下记录。</p>
+              </div>
+              <button id="refreshHistoryBtn" class="ghost-btn" type="button">刷新历史</button>
+            </div>
+            <div id="historySummary" class="history-summary-grid"></div>
+            <div id="historyFilter" class="history-filter"></div>
+            <div id="historyList" class="history-list"></div>
+          </section>
+        </section>
+
+        <section id="view-diagnose" class="view">
+          <section class="panel diagnose-intro-panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Core Workbench</p>
+                <h2>错题拆解工作台</h2>
+                <p class="section-subtitle">上传错题 → OCR 校准 → 超细拆题 → 巩固训练 → 自动写入我的错题本。</p>
+              </div>
+            </div>
+          </section>
+          <div class="diagnose-progress" id="diagnoseProgress">
+            <span class="progress-step active" data-step="input">1 输入错题</span>
+            <span class="progress-step" data-step="diagnose">2 超细拆题</span>
+            <span class="progress-step" data-step="training">3 巩固过关</span>
+            <span class="progress-step" data-step="archive">4 沉淀错题本</span>
+          </div>
+          <div class="workflow-strip">
+            <span>01 输入层<br /><small>全科图片/文本</small></span>
+            <span>02 视觉层<br /><small>OCR 结构化</small></span>
+            <span>03 校准层<br /><small>题干与答案修正</small></span>
+            <span>04 推理层<br /><small>拆题与错因诊断</small></span>
+            <span>05 生成层<br /><small>多解/小诗/变式</small></span>
+            <span>06 训练层<br /><small>作答批改闭环</small></span>
+            <span>07 档案层<br /><small>分科沉淀导出</small></span>
+          </div>
+
+          <div class="workspace-grid">
+            <section class="panel upload-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Step 1</p>
+                  <h2>输入题目与作答</h2>
+                </div>
+                <button id="sampleBtn" class="ghost-btn" type="button">填入样例</button>
+              </div>
+
+              <div id="ocrCalibrationBanner" class="calibration-banner hidden">
+                <strong>请先校准题干</strong>
+                <p>OCR 置信度较低或题干可能有缺损，请修正「题目内容」后再拆解，避免在错误题目上生成长篇解析。</p>
+              </div>
+
+              <label class="field">
+                <span>学科/场景</span>
+                <select id="subjectSelect" class="text-input">
+                  <option value="自动识别">自动识别</option>
+                  <option value="高中数学">高中数学</option>
+                  <option value="初中数学">初中数学</option>
+                  <option value="高中物理">高中物理</option>
+                  <option value="高中化学">高中化学</option>
+                  <option value="高中生物">高中生物</option>
+                  <option value="高中语文">高中语文</option>
+                  <option value="高中英语">高中英语</option>
+                  <option value="高中政治">高中政治</option>
+                  <option value="高中历史">高中历史</option>
+                  <option value="高中地理">高中地理</option>
+                  <option value="其他学科">其他学科</option>
+                </select>
+              </label>
+
+              <div class="input-mode-tabs" role="tablist" aria-label="输入方式">
+                <button class="input-mode active" type="button" data-input-mode="image">图片 OCR</button>
+                <button class="input-mode" type="button" data-input-mode="file">文件上传</button>
+                <button class="input-mode" type="button" data-input-mode="paste">直接粘贴</button>
+              </div>
+
+              <div id="imageInputBlock" class="input-mode-block">
+                <label class="dropzone" for="imageInput">
+                  <input id="imageInput" type="file" accept="image/*" multiple />
+                  <span class="drop-icon">+</span>
+                  <strong>选择题目/作答图片</strong>
+                  <small>可识别印刷题干、手写过程、红叉圈画和老师批注；清晰单题截图效果最好。</small>
+                </label>
+                <img id="previewImage" class="preview hidden" alt="题目预览" />
+
+                <button id="ocrBtn" class="secondary-btn" type="button">
+                  先做 OCR 识别
+                </button>
+              </div>
+
+              <div id="fileInputBlock" class="input-mode-block hidden">
+                <div class="file-ingest" data-target="questionText" data-ocr="true">
+                  <label class="file-dropzone" for="diagnoseFileInput">
+                    <input id="diagnoseFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                    <span class="drop-icon">↑</span>
+                    <strong>上传试卷 / 作业 / 图片 / PDF / Word</strong>
+                    <small>文件会解析并写入「题目内容」框；图片会自动 OCR。支持多文件。</small>
+                  </label>
+                  <ul class="file-ingest-list" id="diagnoseFileList"></ul>
+                </div>
+              </div>
+
+              <div id="pasteInputBlock" class="input-mode-block hidden">
+                <div class="paste-helper">
+                  <strong>无需图片也能拆题</strong>
+                  <span>把题干、选项、材料、学生答案或老师批注直接粘贴到下面两个框即可。</span>
+                </div>
+              </div>
+
+              <label class="field">
+                <span>题目内容（OCR 或直接粘贴）</span>
+                <div class="file-ingest compact-ingest" data-target="questionText" data-ocr="true">
+                  <label class="file-dropzone mini-dropzone" for="questionFileInput">
+                    <input id="questionFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                    <strong>附加文件到本题</strong>
+                    <small>PDF / Word / 图片 / TXT</small>
+                  </label>
+                  <ul class="file-ingest-list" id="questionFileList"></ul>
+                </div>
+                <textarea id="questionText" rows="8" placeholder="可 OCR 自动填入，也可粘贴或上传 PDF/Word/TXT/图片。支持题干、材料、选项、公式或实验信息。"></textarea>
+              </label>
+
+              <label class="field">
+                <span>学生作答情况（可选）</span>
+                <div class="file-ingest compact-ingest" data-target="wrongAnswer" data-ocr="true">
+                  <label class="file-dropzone mini-dropzone" for="answerFileInput">
+                    <input id="answerFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                    <strong>附加作答文件</strong>
+                    <small>作业扫描 / 图片 / PDF</small>
+                  </label>
+                  <ul class="file-ingest-list" id="answerFileList"></ul>
+                </div>
+                <textarea id="wrongAnswer" rows="5" placeholder="可粘贴或上传学生答案、解题过程、错解、卡点、批注图片或 PDF/Word 作业。"></textarea>
+              </label>
+
+              <button id="diagnoseBtn" class="primary-btn" type="button">
+                开始错题拆解
+              </button>
+            </section>
+
+            <section class="panel result-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Step 2</p>
+                  <h2>拆题结果</h2>
+                </div>
+                <span id="resultStatus" class="tag muted">等待题目</span>
+              </div>
+
+              <div id="emptyState" class="empty-state">
+                <div class="empty-ring">AI</div>
+                <h3>上传或粘贴一道题</h3>
+                <p>系统会识别题目与作答情况，再输出拆解公式、错因诊断、生活化比喻、解题模型、一题多解和复盘小诗。</p>
+              </div>
+
+              <div id="diagnosisResult" class="diagnosis hidden">
+                <div id="guestSaveBanner" class="guest-save-banner hidden">
+                  <strong>已保存到本机错题本</strong>
+                  <span>登录后可云端同步、导出档案并在多设备继续训练。</span>
+                  <button id="guestLoginBtn" class="secondary-btn" type="button">登录同步</button>
+                </div>
+
+                <div class="hero-card">
+                  <span class="tag">核心题型</span>
+                  <h3 id="corePattern"></h3>
+                  <p id="confidenceText"></p>
+                </div>
+
+                <div class="standard-answer-card" id="standardAnswerBlock">
+                  <div class="standard-answer-head">
+                    <span class="label">标准答案</span>
+                    <button id="scrollToTrainingBtn" class="secondary-btn" type="button">去做巩固题</button>
+                  </div>
+                  <p id="finalAnswer" class="standard-answer-text"></p>
+                  <details class="standard-solution-details">
+                    <summary>查看简洁解析</summary>
+                    <p id="conciseSolution" class="compact-text"></p>
+                  </details>
+                </div>
+
+                <div class="mini-grid">
+                  <div>
+                    <span class="label">知识点</span>
+                    <div id="kpList" class="chip-row"></div>
+                  </div>
+                  <div>
+                    <span class="label">题目目标</span>
+                    <p id="problemGoal" class="compact-text"></p>
+                  </div>
+                </div>
+
+                <div class="learning-flow">
+                  <div class="learning-flow-head">
+                    <div>
+                      <span class="label">学习工作流</span>
+                      <h3>不是上传即结束，而是按任务推进</h3>
+                    </div>
+                    <span class="tag">DeepSeek/LLM 推理层</span>
+                  </div>
+                  <div class="flow-task-grid">
+                    <button type="button" class="flow-task" data-scroll-target="strategyBlock">
+                      <strong>1 怎么拆解</strong>
+                      <span>先把题拆成可执行步骤</span>
+                    </button>
+                    <button type="button" class="flow-task" data-scroll-target="strategyBlock">
+                      <strong>2 怎么更容易学</strong>
+                      <span>降阶、搭台阶、微练习</span>
+                    </button>
+                    <button type="button" class="flow-task" data-scroll-target="stepBlock">
+                      <strong>3 看拆解公式</strong>
+                      <span>对应公式/采分点</span>
+                    </button>
+                    <button type="button" class="flow-task" data-scroll-target="modelBlock">
+                      <strong>4 学通用模型</strong>
+                      <span>迁移到同类题</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div id="strategyBlock" class="strategy-block">
+                  <div>
+                    <span class="label">怎么拆解？</span>
+                    <p id="decompositionAnswer" class="compact-text"></p>
+                  </div>
+                  <div>
+                    <span class="label">用什么方法让它更容易学？</span>
+                    <p id="makeEasier" class="compact-text"></p>
+                  </div>
+                  <div class="strategy-grid">
+                    <div>
+                      <span>入口</span>
+                      <strong id="entryPoint"></strong>
+                    </div>
+                    <div>
+                      <span>老师引导</span>
+                      <strong id="teacherHint"></strong>
+                    </div>
+                  </div>
+                  <div>
+                    <span class="label">认知台阶</span>
+                    <div id="cognitiveLadder" class="chip-row"></div>
+                  </div>
+                  <div>
+                    <span class="label">微练习</span>
+                    <div id="microDrills" class="chip-row"></div>
+                  </div>
+                </div>
+
+                <div class="answer-analysis-card">
+                  <div>
+                    <span class="label">作答情况识别</span>
+                    <h3 id="answerStatus"></h3>
+                    <p id="answerIssue" class="compact-text"></p>
+                  </div>
+                  <div class="answer-analysis-grid">
+                    <div>
+                      <span>识别作答</span>
+                      <strong id="answerPresence"></strong>
+                    </div>
+                    <div>
+                      <span>下一步</span>
+                      <strong id="answerNextAction"></strong>
+                    </div>
+                  </div>
+                  <div id="answerEvidence" class="chip-row"></div>
+                  <p id="answerExtractedWork" class="compact-text"></p>
+                </div>
+
+                <div id="formulaBlock" class="explain-block">
+                  <span class="label">总拆解公式</span>
+                  <p id="totalFormula" class="compact-text"></p>
+                </div>
+
+                <div id="stepBlock" class="explain-block">
+                  <span class="label">分步骤拆解公式</span>
+                  <div id="stepFormulaList" class="stack-list"></div>
+                </div>
+
+                <details class="diagnosis-extra" id="diagnosisExtra">
+                  <summary>展开更多：解题模型、多解路径、趣味比喻、小诗复盘与学习卡片</summary>
+
+                <div id="modelBlock" class="explain-block">
+                  <span class="label">标准化解题模型</span>
+                  <div id="modelList" class="stack-list"></div>
+                </div>
+
+                <div class="explain-block">
+                  <span class="label">一题多解</span>
+                  <div id="solutionList" class="stack-list"></div>
+                </div>
+
+                <div class="explain-block">
+                  <span class="label">趣味比喻拆解</span>
+                  <h3 id="analogyTheme"></h3>
+                  <p id="analogyOverview" class="compact-text"></p>
+                  <div id="analogySteps" class="stack-list"></div>
+                </div>
+
+                <div class="explain-block">
+                  <span class="label">母题接口预留</span>
+                  <div id="reservedMother" class="reserved-box"></div>
+                </div>
+
+                <div class="poem-card">
+                  <span class="label">趣味小诗与复盘</span>
+                  <h3 id="poemTitle"></h3>
+                  <div id="poemLines" class="poem-lines"></div>
+                  <div id="poemReviews" class="stack-list"></div>
+                </div>
+
+                <div id="studyCardBlock" class="study-card-block">
+                  <div class="study-card-head">
+                    <div>
+                      <span class="label">GPT Image 学习卡片</span>
+                      <h3>把这道题生成一张错题指导训练卡</h3>
+                      <p class="compact-text">卡片会自动整理题目、错因、纠错思路、规范解答、关键提醒、变式训练和自我复盘。</p>
+                    </div>
+                    <div class="study-card-controls">
+                      <label class="field compact-field">
+                        <span>卡片图片模型</span>
+                        <select id="imageModelSelect" class="text-input"></select>
+                      </label>
+                      <button id="generateStudyCardBtn" class="primary-btn" type="button">生成学习卡片</button>
+                    </div>
+                  </div>
+                  <label class="field">
+                    <span>卡片风格补充（可选）</span>
+                    <input id="cardStyleInput" class="text-input" placeholder="例如：更像作业帮、蓝白橙配色、公式大一点、适合打印" />
+                  </label>
+                  <div id="studyCardGallery" class="study-card-gallery"></div>
+                </div>
+
+                </details>
+              </div>
+            </section>
+          </div>
+
+          <section id="trainingPanel" class="panel training-panel hidden">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 3</p>
+                <h2>三道巩固题</h2>
+              </div>
+              <span id="passBadge" class="tag muted">训练中 · 2/3 题正确即过关</span>
+            </div>
+            <div id="variantList" class="variant-list"></div>
+          </section>
+        </section>
+
+        <section id="view-library" class="view">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Wrong Question Book</p>
+                <h2>我的错题本</h2>
+                <p class="section-subtitle">每道错题的拆解结果、巩固题进度与过关状态都会沉淀在这里，可随时回看继续训练。</p>
+              </div>
+              <button id="refreshLibraryBtn" class="ghost-btn" type="button">刷新</button>
+            </div>
+            <div id="libraryList" class="library-list"></div>
+          </section>
+        </section>
+
+        <section id="view-report" class="view">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Report</p>
+                <h2>能力报告</h2>
+              </div>
+            </div>
+            <div id="reportCards" class="report-grid"></div>
+            <div class="report-columns">
+              <div>
+                <h3>常见题型</h3>
+                <div id="weakMothers" class="rank-list"></div>
+              </div>
+              <div>
+                <h3>结构化错因</h3>
+                <div id="errorCauses" class="rank-list"></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-mothers" class="view">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Reserved API</p>
+                <h2>母题预留接口</h2>
+              </div>
+            </div>
+            <div class="reserved-intro">
+              <strong>当前不做正式母题库。</strong>
+              <p>每次错题拆解会自动沉淀「题型原型」到母题库，供后续复习与拓展。</p>
+            </div>
+            <div id="motherList" class="mother-list"></div>
+          </section>
+        </section>
+
+        <section id="view-profile" class="view">
+          <section class="panel profile-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Learning Archive</p>
+                <h2>个人学习档案导出</h2>
+                <p class="section-subtitle">按学科沉淀题目资产，每题可独立选择导出题目、答案、解析、思路、一题多解、小诗和同类题。</p>
+              </div>
+              <button id="refreshProfileBtn" class="ghost-btn" type="button">刷新档案</button>
+            </div>
+
+
+            <section class="share-panel">
+              <div class="share-panel-head">
+                <div>
+                  <p class="eyebrow">Tutor Share</p>
+                  <h3>共享学习状态给家教 / 家长 / 教务</h3>
+                  <p>生成只读链接，对方可查看能力报告、分科学习档案、近期错题和训练状态，不需要登录。</p>
+                </div>
+                <button id="createShareBtn" class="primary-btn" type="button">生成共享链接</button>
+              </div>
+              <div class="share-form-grid">
+                <label class="field compact-field">
+                  <span>链接标题</span>
+                  <input id="shareTitleInput" class="text-input" value="学习状态共享" />
+                </label>
+                <label class="field compact-field">
+                  <span>共享对象</span>
+                  <input id="shareAudienceInput" class="text-input" value="家教/家长/教务" />
+                </label>
+                <label class="field compact-field share-note-field">
+                  <span>备注</span>
+                  <input id="shareNoteInput" class="text-input" placeholder="例如：本周试听老师查看" />
+                </label>
+              </div>
+              <div id="shareList" class="share-list"></div>
+            </section>
+
+            <div class="archive-toolbar">
+              <label class="field compact-field">
+                <span>按学科导出</span>
+                <select id="archiveSubjectSelect" class="text-input">
+                  <option value="全部学科">全部学科</option>
+                </select>
+              </label>
+              <div class="archive-summary">
+                <strong id="archiveCount">0</strong>
+                <span>道题可归档</span>
+              </div>
+              <button id="exportProfileBtn" class="primary-btn" type="button">导出选中档案</button>
+            </div>
+
+            <div class="archive-layout">
+              <aside class="archive-options">
+                <h3>批量内容</h3>
+                <label><input type="checkbox" class="bulk-field" value="question" checked /> 题目</label>
+                <label><input type="checkbox" class="bulk-field" value="student" checked /> 作答情况</label>
+                <label><input type="checkbox" class="bulk-field" value="answer" checked /> 答案</label>
+                <label><input type="checkbox" class="bulk-field" value="analysis" checked /> 解析</label>
+                <label><input type="checkbox" class="bulk-field" value="strategy" checked /> 学习方法</label>
+                <label><input type="checkbox" class="bulk-field" value="thinking" checked /> 详细思路</label>
+                <label><input type="checkbox" class="bulk-field" value="multi" checked /> 一题多解</label>
+                <label><input type="checkbox" class="bulk-field" value="poem" checked /> 小诗复盘</label>
+                <label><input type="checkbox" class="bulk-field" value="similar" checked /> 同类题/巩固题</label>
+                <label><input type="checkbox" class="bulk-field" value="ocr" /> OCR原文</label>
+                <button id="applyBulkFieldsBtn" class="secondary-btn" type="button">应用到所有题</button>
+              </aside>
+              <div id="archiveList" class="archive-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-admin" class="view">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Admin</p>
+                <h2>模型与提示词后台</h2>
+                <p class="section-subtitle">管理员账号登录后可直接管理模型、API Key 与提示词，无需额外口令。</p>
+              </div>
+              <button id="reloadAdminBtn" class="ghost-btn" type="button">刷新配置</button>
+            </div>
+
+            <div class="admin-box key-manager-box">
+              <h3>API 密钥快捷管理</h3>
+              <p class="field-hint">在此直接更换各 Provider 的 Key，保存后立即生效，无需重启服务。已配置的 Key 只显示掩码。</p>
+              <div id="keyManagerList" class="key-manager-grid"></div>
+            </div>
+
+            <div class="admin-grid">
+              <div class="admin-box">
+                <h3>模型配置</h3>
+                <div class="preset-row">
+                  <button id="presetMinimaxBtn" class="ghost-btn" type="button">MiniMax 视觉 OCR</button>
+                  <button id="presetDeepseekBtn" class="ghost-btn" type="button">DeepSeek 推理增强</button>
+                  <button id="presetFennoBtn" class="ghost-btn" type="button">Fenno GPT</button>
+                </div>
+                <input id="modelIdInput" type="hidden" />
+                <label class="field">
+                  <span>显示名称</span>
+                  <input id="modelNameInput" class="text-input" placeholder="MiniMax M3 默认" />
+                </label>
+                <label class="field">
+                  <span>Provider</span>
+                  <input id="providerInput" class="text-input" value="minimax" />
+                </label>
+                <label class="field">
+                  <span>Base URL / Endpoint</span>
+                  <input id="endpointInput" class="text-input" value="https://api.minimax.chat/v1/chat/completions" />
+                  <small class="field-hint">Fenno 可直接填 https://api.fenno.ai，系统会自动使用 /v1/chat/completions。</small>
+                </label>
+                <label class="field">
+                  <span>模型名</span>
+                  <input id="modelNameApiInput" class="text-input" value="MiniMax-M3" />
+                </label>
+                <label class="field">
+                  <span>API Key（保存后只显示掩码）</span>
+                  <input id="apiKeyInput" class="text-input" type="password" placeholder="粘贴 MiniMax API Key" />
+                </label>
+                <div class="form-row">
+                  <label class="field">
+                    <span>Temperature</span>
+                    <input id="temperatureInput" class="text-input" type="number" min="0" max="1.5" step="0.05" value="0.45" />
+                  </label>
+                  <label class="field">
+                    <span>Max Tokens</span>
+                    <input id="maxTokensInput" class="text-input" type="number" min="1000" step="500" value="7000" />
+                  </label>
+                </div>
+                <label class="check-row">
+                  <input id="visionInput" type="checkbox" checked />
+                  <span>支持图片输入/OCR</span>
+                </label>
+                <button id="saveModelBtn" class="primary-btn" type="button">保存模型</button>
+                <div id="modelAdminList" class="admin-list"></div>
+              </div>
+
+              <div class="admin-box image-admin-box">
+                <h3>图片模型配置</h3>
+                <div class="preset-row">
+                  <button id="presetImageBtn" class="ghost-btn" type="button">OpenAI GPT Image</button>
+                  <button id="presetFennoImageBtn" class="ghost-btn" type="button">Fenno GPT-Image2</button>
+                </div>
+                <input id="imageModelIdInput" type="hidden" />
+                <label class="field">
+                  <span>显示名称</span>
+                  <input id="imageModelNameInput" class="text-input" value="OpenAI GPT Image 卡片生成" />
+                </label>
+                <label class="field">
+                  <span>Provider</span>
+                  <input id="imageProviderInput" class="text-input" value="openai" />
+                </label>
+                <label class="field">
+                  <span>Base URL / Endpoint</span>
+                  <input id="imageEndpointInput" class="text-input" value="https://api.openai.com/v1/images/generations" />
+                  <small class="field-hint">Fenno 可直接填 https://api.fenno.ai，系统会自动调用图片生成接口。</small>
+                </label>
+                <label class="field">
+                  <span>模型名</span>
+                  <input id="imageModelNameApiInput" class="text-input" value="gpt-image-1.5" />
+                </label>
+                <label class="field">
+                  <span>API Key（保存后只显示掩码）</span>
+                  <input id="imageApiKeyInput" class="text-input" type="password" placeholder="粘贴 OpenAI API Key" />
+                </label>
+                <div class="form-row">
+                  <label class="field">
+                    <span>Size</span>
+                    <input id="imageSizeInput" class="text-input" value="1024x1536" />
+                  </label>
+                  <label class="field">
+                    <span>Quality</span>
+                    <input id="imageQualityInput" class="text-input" value="high" />
+                  </label>
+                </div>
+                <button id="saveImageModelBtn" class="primary-btn" type="button">保存图片模型</button>
+                <div id="imageModelAdminList" class="admin-list"></div>
+              </div>
+
+              <div class="admin-box">
+                <h3>提示词模板</h3>
+                <label class="field">
+                  <span>模板</span>
+                  <select id="promptSelect" class="text-input"></select>
+                </label>
+                <label class="field">
+                  <span>内容</span>
+                  <textarea id="promptContent" rows="22"></textarea>
+                </label>
+                <button id="savePromptBtn" class="primary-btn" type="button">保存提示词</button>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="authModal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="authTitle">登录 / 注册</h2>
+          <button class="ghost-btn modal-close" type="button" data-close-modal="authModal">关闭</button>
+        </div>
+        <div class="modal-tabs">
+          <button class="modal-tab active" type="button" data-auth-mode="login">登录</button>
+          <button class="modal-tab" type="button" data-auth-mode="register">注册</button>
+        </div>
+        <p id="authHint" class="section-subtitle">登录后即可同步积分、兑换权益并保存生成历史。</p>
+        <label class="field"><span>邮箱</span><input id="authEmail" class="text-input" type="email" placeholder="you@example.com" /></label>
+        <label class="field"><span>密码</span><input id="authPassword" class="text-input" type="password" placeholder="至少 6 位" /></label>
+        <label class="terms-check"><input id="termsAgree" type="checkbox" checked /> <span>我已阅读并同意 <button class="terms-link" type="button" data-terms="service">服务协议</button>、<button class="terms-link" type="button" data-terms="privacy">隐私政策</button>、<button class="terms-link" type="button" data-terms="ai">AI生成免责声明</button></span></label>
+        <button id="authSubmitBtn" class="primary-btn" type="button">登录</button>
+      </div>
+    </div>
+
+    <div id="redeemModal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>积分兑换</h2>
+          <button class="ghost-btn modal-close" type="button" data-close-modal="redeemModal">关闭</button>
+        </div>
+        <p class="section-subtitle">输入兑换码后，为当前账号增加积分。样品内置演示码：DEMO2026。</p>
+        <label class="field"><span>兑换码</span><input id="redeemCodeInput" class="text-input" placeholder="请输入兑换码" /></label>
+        <button id="redeemSubmitBtn" class="primary-btn" type="button">立即兑换</button>
+      </div>
+    </div>
+
+    <div id="contactModal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>联系我们</h2>
+          <button class="ghost-btn modal-close" type="button" data-close-modal="contactModal">关闭</button>
+        </div>
+        <div class="contact-list">
+          <div><strong>产品合作</strong><span>可在后台配置你的微信、邮箱或企业微信入口。</span></div>
+          <div><strong>部署上线</strong><span>支持本地 Demo、单机服务器、Docker 与 Nginx 反代。</span></div>
+          <div><strong>功能扩展</strong><span>可继续接入真实支付、学校账号、班级管理和正式题库。</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="termsModal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-card terms-modal-card">
+        <div class="modal-head">
+          <h2 id="termsTitle">服务协议</h2>
+          <button class="ghost-btn modal-close" type="button" data-close-modal="termsModal">关闭</button>
+        </div>
+        <div id="termsContent" class="terms-content"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    <script defer src="/app.js?v=20260701auth1"></script>
+  </body>
+</html>
