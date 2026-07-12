@@ -52,7 +52,8 @@ function prepareChineseWorkbench() {
   const nav = $(".nav");
   if (nav) nav.innerHTML = `
     <button class="nav-item active" data-view="portal"><span class="nav-icon">首</span><span data-nav-label>学习首页</span></button>
-    <button class="nav-item nav-core" data-view="diagnose"><span class="nav-icon">析</span><span data-nav-label>试卷与错题分析</span></button>
+    <button class="nav-item nav-core" data-view="paper"><span class="nav-icon">卷</span><span data-nav-label>试卷分析</span></button>
+    <button class="nav-item nav-core" data-view="diagnose"><span class="nav-icon">题</span><span data-nav-label>错题分析</span></button>
     <button class="nav-item" data-view="library"><span class="nav-icon">本</span><span data-nav-label>我的错题本</span></button>
     <button class="nav-item" data-view="report"><span class="nav-icon">报</span><span data-nav-label>学习报告</span></button>
     <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>历史记录</span></button>
@@ -73,6 +74,21 @@ function prepareChineseWorkbench() {
   const institution = $(".institution-entry");
   if (institution) institution.innerHTML = `<a href="/org" class="primary-btn">机构工作台</a><a href="/org-admin" class="ghost-btn">机构管理</a>`;
   $(".portal-tools-panel")?.removeAttribute("data-student-hide");
+  const main = $(".main");
+  const paperWorkbench = $("#paperWorkbench");
+  if (main && paperWorkbench && !$("#view-paper")) {
+    const paperView = document.createElement("section");
+    paperView.id = "view-paper"; paperView.className = "view";
+    paperView.innerHTML = `<section class="panel split-view-intro"><p class="eyebrow">整卷识别</p><h2>试卷分析工作台</h2><p>上传完整试卷，逐题识别印刷内容、学生笔迹和教师批改，再生成全卷报告。</p></section>`;
+    paperView.appendChild(paperWorkbench);
+    main.appendChild(paperView);
+  }
+  const toolPanel = $(".portal-tools-panel"), dashboard = $("#dualDashboard");
+  if (toolPanel && dashboard) {
+    toolPanel.classList.add("home-tool-matrix");
+    dashboard.insertAdjacentElement("afterend", toolPanel);
+    const heading = toolPanel.querySelector("h2"); if (heading) heading.textContent = "全部22个学习与教学功能";
+  }
   applyWorkMode(state.workMode);
 }
 
@@ -88,8 +104,8 @@ function applyWorkMode(mode) {
   if ($("#dashboardTitle")) $("#dashboardTitle").textContent = teacher ? "从一张试卷，看清每个学生的问题" : "把不会的题，真正练到会";
   if ($("#dashboardLead")) $("#dashboardLead").textContent = teacher ? "批量分析试卷、复核识别结果、查看知识点失分，并导出可交付的教学报告。" : "上传整张试卷或一道错题，识别笔迹、定位错因、八步讲解，再进入巩固和复习。";
   const labels = teacher
-    ? ["教学首页","试卷与错题分析","学生错题库","学情报告","历史记录","20个工作台"]
-    : ["学习首页","试卷与错题分析","我的错题本","学习报告","历史记录","20个工作台"];
+    ? ["教学首页","试卷分析","错题分析","学生错题库","学情报告","历史记录","22个工作台"]
+    : ["学习首页","试卷分析","错题分析","我的错题本","学习报告","历史记录","22个工作台"];
   $$(".nav-item [data-nav-label]").forEach((node,index) => { if (labels[index]) node.textContent=labels[index]; });
   loadDashboard().catch(() => {});
 }
@@ -115,10 +131,11 @@ function bindDashboard() {
   $("#dashboardRefreshBtn")?.addEventListener("click",()=>loadDashboard().catch(err=>toast(err.message)));
   $("#paperFilesInput")?.addEventListener("change", updatePaperSelection);
   $("#workspaceLoginBtn")?.addEventListener("click",()=>state.appConfig.use_unified_auth?goUnifiedLogin("login"):openModal("authModal"));
-  $("#sidebarLoginBtn")?.addEventListener("click",()=>state.user?logoutPersonalAccount():openModal("authModal"));
+  $("#sidebarLoginBtn")?.addEventListener("click",()=>state.user?logoutPersonalAccount():goUnifiedLogin("login"));
   $$('[data-dashboard-action]').forEach(btn=>btn.addEventListener("click",()=>{
     const action=btn.dataset.dashboardAction;
-    if (["paper","single","review"].includes(action)) { switchView("diagnose"); setTimeout(()=>$(action==="single"?".upload-panel":"#paperWorkbench")?.scrollIntoView({behavior:"smooth"}),50); }
+    if (action === "paper") { switchView("paper"); setTimeout(()=>$("#paperWorkbench")?.scrollIntoView({behavior:"smooth"}),50); }
+    else if (["single","review"].includes(action)) { switchView("diagnose"); setTimeout(()=>$(".upload-panel")?.scrollIntoView({behavior:"smooth"}),50); }
     else if (action==="library"||action==="today") switchView(action==="library"?"library":"portal");
     else if (action==="report") switchView("report"); else if (action==="profile") switchView("profile");
   }));
@@ -666,11 +683,8 @@ updateAccountCard = function updateAccountCardClean() {
   desc.textContent = state.appConfig.use_unified_auth
     ? "接入 MS1001 统一认证后，可以和 Poster、家教网、会员中心共用同一个账号。"
     : "注册后赠送 9 个本地演示积分，可兑换并保存生成成果。";
-  actions.innerHTML = state.appConfig.use_unified_auth
-    ? `<button class="primary-btn" type="button" id="openUnifiedAuthBtn">统一登录 / 注册</button><button class="ghost-btn" type="button" id="openAuthBtn">本地账号</button><button class="ghost-btn" type="button" id="openRedeemAnonBtn">积分兑换</button>`
-    : `<button class="primary-btn" type="button" id="openAuthBtn">登录 / 注册</button><button class="ghost-btn" type="button" id="openRedeemAnonBtn">积分兑换</button>`;
+  actions.innerHTML = `<button class="primary-btn" type="button" id="openUnifiedAuthBtn">统一登录 / 注册</button>`;
   $("#openUnifiedAuthBtn")?.addEventListener("click", () => goUnifiedLogin("login"));
-  $("#openAuthBtn")?.addEventListener("click", () => openModal("authModal"));
   $("#openRedeemAnonBtn")?.addEventListener("click", () => openModal("redeemModal"));
 };
 
@@ -750,6 +764,37 @@ async function loadPortalTools() {
   state.portalTools = await api("/api/portal-tools");
   renderPortalTools();
   renderToolSelect();
+}
+
+function renderLatexDocument(source){
+  const preview=$("#latexRenderPreview"); if(!preview)return;
+  const body=String(source||"").replace(/[\s\S]*?\\begin\{document\}/," ").replace(/\\end\{document\}[\s\S]*/,"").replace(/\\maketitle/g,"");
+  const chunks=body.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g).filter(Boolean);
+  preview.innerHTML=chunks.map(chunk=>{
+    if(chunk.startsWith("$$")||chunk.startsWith("$")){
+      const display=chunk.startsWith("$$"), math=chunk.slice(display?2:1,display?-2:-1);
+      try{return window.katex?katex.renderToString(math,{displayMode:display,throwOnError:false,trust:false}):`<code>${escapeHtml(chunk)}</code>`;}catch{return `<code>${escapeHtml(chunk)}</code>`;}
+    }
+    return `<span>${escapeHtml(chunk.replace(/\\par/g,"\n").replace(/\\\\/g,"\n"))}</span>`;
+  }).join("");
+}
+
+async function convertLatexInput(){
+  const file=$("#latexFileInput")?.files?.[0], textValue=$("#latexPasteInput")?.value||"";
+  if(!file&&!textValue.trim()){toast("请粘贴内容或选择文件。");return;}
+  const button=$("#convertLatexBtn"), done=setBusy(button,"正在转换...");
+  try{
+    const payload=file?{filename:file.name,data_url:await readFileAsDataUrl(file),model_id:selectedModelId()}:{filename:"魔法粘贴.txt",text:textValue};
+    const result=await api("/api/latex/convert",{method:"POST",body:JSON.stringify(payload)});
+    $("#latexSourceOutput").value=result.latex||""; state.lastLatex=result; renderLatexDocument(result.latex);
+    toast(result.requires_formula_review?"转换完成，复杂公式需要复核。":"LaTeX转换与渲染完成。");
+  }catch(err){toast(err.message);}finally{done();}
+}
+
+function downloadLastLatex(){
+  const source=$("#latexSourceOutput")?.value||""; if(!source){toast("请先完成转换。");return;}
+  const blob=new Blob([source],{type:"application/x-tex;charset=utf-8"}), url=URL.createObjectURL(blob), a=document.createElement("a");
+  a.href=url;a.download=state.lastLatex?.filename||"试卷.tex";a.click();URL.revokeObjectURL(url);
 }
 
 async function loadInstitutions() {
@@ -2579,6 +2624,8 @@ function bindEvents() {
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
   $("#portalStartBtn")?.addEventListener("click", () => switchView("diagnose"));
   $("#portalLibraryBtn")?.addEventListener("click", () => switchView("library"));
+  $("#convertLatexBtn")?.addEventListener("click", convertLatexInput);
+  $("#downloadLatexBtn")?.addEventListener("click", downloadLastLatex);
   $("#refreshTodayBtn")?.addEventListener("click", () => renderTodayPanel().catch((err) => toast(err.message)));
   $("#studentModeToggle")?.addEventListener("change", (event) => {
     state.studentMode = event.target.checked;

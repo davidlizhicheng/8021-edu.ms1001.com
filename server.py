@@ -27,6 +27,7 @@ import institution_store as org_inst_store
 from learning_workflow import normalize_error_type, practice_tier, transition
 from paper_workflow import normalize_answer_state, normalize_eight_steps, paper_summary, split_numbered_questions
 from gaokao_core import SEED_MOTHER_QUESTIONS, build_gaokao_card, match_mother_question
+from latex_pipeline import convert_bytes, detect_paste_format, text_to_latex
 
 
 ROOT = Path(__file__).resolve().parent
@@ -3739,6 +3740,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 if path == "/api/portal-tools":
                     self.send_json(PORTAL_TOOLS)
                     return
+                if path == "/api/gaokao-2026":
+                    if not user:
+                        self.send_json({"error": "请先通过统一账号登录"}, 401); return
+                    manifest_path = DATA_DIR / "gaokao_2026" / "manifest.json"
+                    if not manifest_path.exists():
+                        self.send_json({"error": "真题库尚未导入"}, 404); return
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    self.send_json(manifest)
+                    return
                 if path == "/api/agent/layers":
                     self.send_json(AGENT_LAYERS)
                     return
@@ -3954,6 +3964,26 @@ class AppHandler(BaseHTTPRequestHandler):
             if org_resp:
                 self.send_json(org_resp[1], org_resp[0])
                 return
+            if path == "/api/latex/convert":
+                data = self.read_json()
+                filename = str(data.get("filename") or "魔法粘贴.txt")[:240]
+                paste = str(data.get("text") or "")
+                data_url = str(data.get("data_url") or "")
+                if len(paste) > 2_000_000 or len(data_url) > 22_000_000:
+                    self.send_json({"error": "文件过大，单次转换上限约15MB"}, 413); return
+                if data_url:
+                    header, content = decode_data_url(data_url)
+                    if header.startswith("data:image/"):
+                        ocr = run_ocr(data_url, data.get("model_id"))
+                        extracted = str(ocr.get("text") or ocr.get("ocr_text") or "")
+                        result = convert_bytes(filename, content, extracted)
+                        result["ocr_confidence"] = ocr.get("confidence")
+                    else:
+                        extracted = extract_document_text(filename, content)
+                        result = convert_bytes(filename, content, extracted)
+                else:
+                    result = {"filename": f"{Path(filename).stem}.tex", "latex": text_to_latex(paste, Path(filename).stem), "engine": "magic-paste-web", "detected_format": detect_paste_format(paste), "requires_formula_review": False}
+                self.send_json(result, 201); return
             if path == "/api/papers":
                 data = self.read_json()
                 def request_text(value, default=""):

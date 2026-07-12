@@ -6,7 +6,7 @@
     <title>AI错题拆博士®---AI中高考错题难题拆解提分博士</title>
     <link rel="icon" href="data:," />
     <script>localStorage.setItem('ms1001-lang','zh');localStorage.setItem('ms1001-account-lang','zh');document.documentElement.lang='zh-CN';</script>
-    <link rel="stylesheet" href="/styles.css?v=20260712poem4" />
+    <link rel="stylesheet" href="/styles.css?v=20260712mogan5" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
       <script src="https://ai.ms1001.com/shared/ms1001-theme-boot.js?v=20260709brandmatch"></script>
       <link rel="stylesheet" href="https://ai.ms1001.com/shared/ms1001-chrome.css?v=20260709brandmatch" data-ms1001-chrome-css="1" />
@@ -414,6 +414,15 @@
                 <div class="agent-layer-grid" id="agentLayerGrid"></div>
               </div>
             </div>
+            <section class="latex-studio" id="latexStudio">
+              <div class="panel-head compact-head"><div><p class="eyebrow">Mogan兼容 · Magic Paste</p><h3>全内容LaTeX工作台</h3><p>粘贴内容或导入Word、PDF、图片，统一转换为LaTeX源代码并渲染预览。</p></div><button id="downloadLatexBtn" class="ghost-btn" type="button">下载 .tex</button></div>
+              <div class="latex-studio-grid">
+                <div><input id="latexFileInput" type="file" accept=".docx,.pdf,.txt,.md,.html,image/*" /><textarea id="latexPasteInput" rows="8" placeholder="魔法粘贴：支持普通文本、Markdown、HTML或LaTeX……"></textarea><button id="convertLatexBtn" class="primary-btn" type="button">转换为LaTeX并渲染</button></div>
+                <div><label>LaTeX源代码</label><textarea id="latexSourceOutput" rows="14" spellcheck="false"></textarea></div>
+                <div><label>渲染预览</label><div id="latexRenderPreview" class="latex-render-preview">转换结果将在这里预览。</div></div>
+              </div>
+              <small>基于Mogan魔法粘贴的格式分流思想；图片先OCR。复杂公式与扫描件会标记人工复核。已导入2026高考数学6类试卷、12份LaTeX主文档和12份PDF参考文件。</small>
+            </section>
           </section>
         </section>
 
@@ -1159,7 +1168,7 @@
     <div id="toast" class="toast hidden"></div>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-    <script defer src="/app.js?v=20260712poem4"></script>
+    <script defer src="/app.js?v=20260712mogan5"></script>
       <script src="https://ai.ms1001.com/shared/ms1001-site-boot.js?v=20260709brandmatch" defer></script>
   </body>
 </html>
