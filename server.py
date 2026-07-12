@@ -1546,14 +1546,114 @@ def extract_json(text: str) -> dict:
     clean = strip_thinking(text)
     clean = re.sub(r"^```(?:json)?", "", clean.strip(), flags=re.IGNORECASE).strip()
     clean = re.sub(r"```$", "", clean.strip()).strip()
+    candidates = [clean]
+    start = clean.find("{")
+    end = clean.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(clean[start : end + 1])
+    for candidate in list(candidates):
+        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+        if repaired != candidate:
+            candidates.append(repaired)
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate, strict=False)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise json.JSONDecodeError("model response is not a JSON object", clean, 0)
+
+
+def _clamp_confidence(value: object, default: float = 0.0) -> float:
     try:
-        return json.loads(clean)
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return round(max(0.0, min(1.0, number)), 4)
+
+
+def _normalize_bbox(value: object) -> list[float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    normalized = []
+    for item in value:
+        try:
+            normalized.append(max(0.0, min(1.0, float(item))))
+        except (TypeError, ValueError):
+            return None
+    return normalized
+
+
+def normalize_paper_ocr_payload(payload: dict, *, parse_mode: str = "json", repaired: bool = False) -> dict:
+    page_text = str(payload.get("page_text") or payload.get("ocr_text") or "").strip()
+    raw_questions = payload.get("questions") if isinstance(payload.get("questions"), list) else []
+    questions = []
+    for index, raw in enumerate(raw_questions, start=1):
+        if not isinstance(raw, dict):
+            continue
+        printed_text = str(raw.get("printed_text") or raw.get("question_text") or "").strip()
+        student_work = str(raw.get("student_work") or "").strip()
+        teacher_marks = str(raw.get("teacher_marks") or "").strip()
+        if not printed_text and not student_work and not teacher_marks:
+            continue
+        score, max_score = raw.get("score"), raw.get("max_score")
+        questions.append({
+            **raw,
+            "question_no": str(raw.get("question_no") or index),
+            "printed_text": printed_text,
+            "student_work": student_work,
+            "teacher_marks": teacher_marks,
+            "answer_state": normalize_answer_state(raw.get("answer_state"), score, max_score),
+            "confidence": _clamp_confidence(raw.get("confidence"), 0.45),
+            "bbox": _normalize_bbox(raw.get("bbox")),
+            "continuation": bool(raw.get("continuation", False)),
+        })
+    if not page_text and questions:
+        page_text = "\n\n".join(q["printed_text"] for q in questions if q["printed_text"])
+    return {
+        **payload,
+        "page_text": page_text,
+        "page_confidence": _clamp_confidence(payload.get("page_confidence"), 0.0),
+        "questions": questions,
+        "parse_mode": parse_mode,
+        "response_repaired": bool(repaired),
+    }
+
+
+def _extract_truncated_page_text(raw: str) -> str:
+    match = re.search(r'"page_text"\s*:\s*"((?:\\.|[^"\\])*)"', raw or "", flags=re.DOTALL)
+    if not match:
+        return ""
+    try:
+        return json.loads(f'"{match.group(1)}"', strict=False)
     except json.JSONDecodeError:
-        start = clean.find("{")
-        end = clean.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(clean[start : end + 1])
-        raise
+        return match.group(1).replace("\\n", "\n").replace('\\"', '"')
+
+
+def parse_paper_ocr_response(raw: str) -> dict:
+    """Decode vision output without discarding readable OCR when JSON is malformed."""
+    try:
+        payload = extract_json(raw)
+        direct = strip_thinking(raw).strip().lstrip("`").removeprefix("json").strip()
+        repaired = re.sub(r",\s*([}\]])", r"\1", direct) != direct
+        return normalize_paper_ocr_payload(payload, repaired=repaired)
+    except json.JSONDecodeError:
+        page_text = _extract_truncated_page_text(raw)
+        parse_mode = "truncated_json_fallback" if page_text else "text_fallback"
+        page_text = page_text or strip_thinking(raw).strip()
+        questions = split_numbered_questions(page_text)
+        for question in questions:
+            question.setdefault("answer_state", "review_required")
+            question["confidence"] = min(float(question.get("confidence") or 0.45), 0.55)
+        return normalize_paper_ocr_payload(
+            {"page_text": page_text, "page_confidence": 0.35 if page_text else 0.0, "questions": questions},
+            parse_mode=parse_mode,
+            repaired=True,
+        )
 
 
 PAPER_OCR_PROMPT = """你是全卷分析 OCR 与阅卷助手。只根据试卷页面识别，不编造。
@@ -3348,17 +3448,57 @@ def public_app_config() -> dict:
     }
 
 
+def normalize_ocr_image_data_url(image_data_url: str, max_long_side: int = 2200) -> tuple[str, dict]:
+    """Apply EXIF orientation and bounded resizing; keep the original on any failure."""
+    metadata = {"processed": False, "reason": "unchanged"}
+    try:
+        from PIL import Image, ImageOps
+
+        header, encoded = image_data_url.split(",", 1)
+        if not header.lower().startswith("data:image/") or ";base64" not in header.lower():
+            return image_data_url, {**metadata, "reason": "unsupported_data_url"}
+        source_bytes = base64.b64decode(encoded, validate=True)
+        with Image.open(BytesIO(source_bytes)) as source:
+            orientation = int(source.getexif().get(274, 1) or 1)
+            image = ImageOps.exif_transpose(source)
+            original_size = list(image.size)
+            needs_resize = max(image.size) > max_long_side
+            if needs_resize:
+                image.thumbnail((max_long_side, max_long_side), Image.Resampling.LANCZOS)
+            if orientation == 1 and not needs_resize:
+                return image_data_url, {
+                    **metadata, "reason": "already_optimized", "original_size": original_size,
+                    "output_size": original_size, "original_bytes": len(source_bytes), "output_bytes": len(source_bytes),
+                }
+            if image.mode not in {"RGB", "L"}:
+                image = image.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=88, optimize=True)
+            output_bytes = output.getvalue()
+        return "data:image/jpeg;base64," + base64.b64encode(output_bytes).decode("ascii"), {
+            "processed": True,
+            "reason": "oriented_and_resized" if orientation != 1 and needs_resize else "exif_oriented" if orientation != 1 else "resized",
+            "original_size": original_size,
+            "output_size": list(image.size),
+            "original_bytes": len(source_bytes),
+            "output_bytes": len(output_bytes),
+        }
+    except Exception as exc:
+        return image_data_url, {**metadata, "reason": "preprocess_failed", "error": compact_text(exc, 160)}
+
+
 def run_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
     with db() as conn:
         model = get_vision_model(conn, model_id)
+    normalized_image, image_metadata = normalize_ocr_image_data_url(image_data_url)
     content = [
         {"type": "text", "text": PAPER_OCR_PROMPT},
-        {"type": "image_url", "image_url": {"url": image_data_url, "detail": "high", "max_long_side_pixel": 2200}},
+        {"type": "image_url", "image_url": {"url": normalized_image, "detail": "high", "max_long_side_pixel": 2200}},
     ]
     raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=7000, temperature=0.1)
-    result = extract_json(raw)
-    result.setdefault("questions", [])
-    result.setdefault("page_confidence", 0.0)
+    result = parse_paper_ocr_response(raw)
+    result["raw_response_preview"] = compact_text(raw, 600)
+    result["image_preprocessing"] = image_metadata
     return result
 
 
@@ -3369,11 +3509,25 @@ def ocr_quality_score(result: dict) -> float:
     return confidence * 0.65 + min(1.0, usable / max(1, len(questions))) * 0.2 + min(1.0, usable / 8) * 0.15
 
 
+def paper_ocr_needs_retry(result: dict) -> bool:
+    questions = result.get("questions") if isinstance(result.get("questions"), list) else []
+    page_text = str(result.get("page_text") or "").strip()
+    usable = [q for q in questions if len(str(q.get("printed_text") or "").strip()) >= 6]
+    if not page_text or not usable:
+        return True
+    if result.get("parse_mode") in {"text_fallback", "truncated_json_fallback"}:
+        return True
+    confidence = _clamp_confidence(result.get("page_confidence"), 0.0)
+    # A complete, segmented page is more valuable than a self-reported confidence score.
+    return confidence < 0.42 and len(usable) < 2
+
+
 def best_of_two_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
-    """低置信度时复识别，并按置信度、有效题干数选择更完整结果。"""
+    """Retry only unusable pages, then keep the structurally stronger result."""
     first = run_paper_ocr(image_data_url, model_id)
-    if float(first.get("page_confidence") or 0) >= 0.82 and len(first.get("questions") or []) >= 1:
+    if not paper_ocr_needs_retry(first):
         first["recognition_attempts"] = 1
+        first["quality_score"] = round(ocr_quality_score(first), 3)
         return first
     second = run_paper_ocr(image_data_url, model_id)
     chosen = max((first, second), key=ocr_quality_score)
