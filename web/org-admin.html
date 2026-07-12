@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>机构管理 — AI错题拆博士</title>
+  <link rel="stylesheet" href="/static/org-portal.css" />
+  <style>
+    body { background: #faf7f5; }
+    .admin-wrap { max-width: 920px; margin: 0 auto; padding: 24px 20px 48px; }
+    .panel { background: #fff; border: 1px solid #ead9d4; border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+    label { display: block; font-size: 13px; margin: 10px 0 4px; color: #555; }
+    input, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
+    .btn { display: inline-block; padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer; font-weight: 700; }
+    .btn-primary { background: #8f1717; color: #fff; }
+    .staff-tag { display: inline-block; background: #fdecea; color: #8f1717; padding: 4px 10px; border-radius: 999px; margin: 4px 6px 0 0; font-size: 13px; }
+    .member-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    .member-table th, .member-table td { border-bottom: 1px solid #ead9d4; padding: 10px 8px; text-align: left; font-size: 14px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body class="org-portal-page">
+  <header class="org-topbar">
+    <div class="org-topbar-inner">
+      <a class="org-brand" href="/">
+        <span class="org-brand-mark">博</span>
+        <span><div class="org-brand-title">AI错题拆博士</div><div class="org-brand-sub">教培机构管理端</div></span>
+      </a>
+      <nav class="org-topnav">
+        <a href="/org">机构站点</a>
+        <a href="/">工具门户</a>
+        <a href="https://ai.ms1001.com/login?redirect=https%3A%2F%2Fedu.ms1001.com%2Forg-admin">登录</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="admin-wrap">
+    <div id="msg" style="display:none;padding:10px;border-radius:8px;margin-bottom:12px"></div>
+
+    <div id="gate" class="panel">
+      <h2>机构管理员</h2>
+      <p>学校 / 教培机构可注册班级化错题管理权限。请先用 ai.ms1001.com 统一账号登录。</p>
+      <a class="btn btn-primary" href="https://ai.ms1001.com/login?redirect=https%3A%2F%2Fedu.ms1001.com%2Forg-admin">统一登录</a>
+    </div>
+
+    <div id="register-panel" class="panel" hidden>
+      <h2>注册教培机构</h2>
+      <form id="register-form">
+        <label>机构名称 *</label>
+        <input name="name" required placeholder="如：深圳某某复读学校" />
+        <div class="grid2">
+          <div><label>城市</label><input name="city" value="深圳" /></div>
+          <div><label>联系人</label><input name="contact_name" /></div>
+        </div>
+        <label>联系电话</label>
+        <input name="contact_phone" />
+        <label>机构简介</label>
+        <textarea name="intro" rows="3" placeholder="服务年级、班级规模、错题提分场景"></textarea>
+        <p style="margin-top:12px"><button class="btn btn-primary" type="submit">提交注册</button></p>
+      </form>
+    </div>
+
+    <div id="workspace" hidden>
+      <div class="panel">
+        <h2 id="org-name">机构管理</h2>
+        <p id="org-meta"></p>
+        <form id="org-form">
+          <div class="grid2">
+            <div><label>机构名称</label><input name="name" required /></div>
+            <div><label>城市</label><input name="city" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>联系人</label><input name="contact_name" /></div>
+            <div><label>联系电话</label><input name="contact_phone" /></div>
+          </div>
+          <label>简介</label>
+          <textarea name="intro" rows="3"></textarea>
+          <label>服务班级数（展示用）</label>
+          <input name="class_count" type="number" min="0" />
+          <p style="margin-top:12px"><button class="btn btn-primary" type="submit">保存</button></p>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>协作账号</h2>
+        <p>负责人可追加统一账号用户名，供教务 / 班主任进入后台。</p>
+        <div id="staff-list"></div>
+        <form id="staff-form" style="margin-top:12px">
+          <label>追加管理员用户名</label>
+          <div class="grid2">
+            <input name="username" required placeholder="统一账号用户名" />
+            <button class="btn btn-primary" type="submit">添加</button>
+          </div>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>机构成员库</h2>
+        <p>添加本机构下属学生、老师或教务。成员保留普通用户身份，同时带机构标识，后续错题记录可按机构归属汇总。</p>
+        <form id="member-form">
+          <div class="grid2">
+            <div><label>姓名 *</label><input name="name" required placeholder="如：李同学" /></div>
+            <div><label>统一账号用户名</label><input name="username" placeholder="可选；有账号时填写" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>角色</label><select name="role" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px"><option value="student">学生</option><option value="teacher">老师</option><option value="staff">教务</option></select></div>
+            <div><label>年级</label><input name="grade" placeholder="高一 / 初三 / 六年级" /></div>
+          </div>
+          <div class="grid2">
+            <div><label>班级/小组</label><input name="class_name" /></div>
+            <div><label>联系电话</label><input name="phone" /></div>
+          </div>
+          <label>备注</label>
+          <textarea name="note" rows="2"></textarea>
+          <p style="margin-top:12px"><button class="btn btn-primary" type="submit">添加 / 更新成员</button></p>
+        </form>
+        <div id="member-list"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/org-admin.js"></script>
+</body>
+</html>

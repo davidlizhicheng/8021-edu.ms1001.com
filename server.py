@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +23,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import export_utils
+import institution_store as org_inst_store
+from learning_workflow import normalize_error_type, practice_tier, transition
+from paper_workflow import normalize_answer_state, normalize_eight_steps, paper_summary, split_numbered_questions
+from gaokao_core import SEED_MOTHER_QUESTIONS, build_gaokao_card, match_mother_question
 
 
 ROOT = Path(__file__).resolve().parent
@@ -71,6 +76,37 @@ PORTAL_TOOLS = [
     {"id": "knowledge-explain", "number": "20", "label": "æ¦‚å¿µç²¾è®²åŠ©æ‰‹", "tagline": "è®²è§£ç¨¿ Word å¯¼å‡º", "category": "æ¦‚å¿µè®²è§£", "route": "tool", "mode": "explain", "delivery": "docx"},
     {"id": "essay-polish", "number": "21", "label": "è¡¨è¾¾æ¶¦è‰²æ•™ç»ƒ", "tagline": "æ¶¦è‰²ç¨¿ Word å¯¼å‡º", "category": "è¯­è¨€è®­ç»ƒ", "route": "tool", "mode": "writing", "delivery": "docx"},
     {"id": "score-action", "number": "22", "label": "æåˆ†è¡ŒåŠ¨è·¯çº¿å›¾", "tagline": "è¡ŒåŠ¨æ–¹æ¡ˆ Word å¯¼å‡º", "category": "å¤‡è€ƒè§„åˆ’", "route": "tool", "mode": "score", "delivery": "docx"},
+]
+
+# 历史版本曾以错误编码写入中文常量。这里使用规范中文作为唯一线上工具目录，
+# 保持既有 id/mode/route，避免只在前端掩盖乱码。
+_TOOL_ZH = {
+    "wrong-transfer": ("错题八步拆解", "作答还原、错因诊断、母题模型与巩固过关", "错题突破"),
+    "paper-analysis": ("全卷学情分析", "上传试卷生成逐题诊断与分析报告", "学情诊断"),
+    "paper-variant": ("试卷变式机", "基于原卷生成同型变式训练卷", "命题训练"),
+    "ai-paper": ("AI分层出题", "按知识点、难度和题量智能命题", "命题训练"),
+    "paper-word": ("题卷重排Word", "整理题卷并导出可编辑Word", "文档整理"),
+    "image-teacher": ("教学配图生成", "生成课堂、讲义和课件配图", "配图生成"),
+    "ppt-review": ("试卷讲评课件", "生成可编辑的讲评PowerPoint", "课件辅助"),
+    "aippt-online3": ("AI课件在线生成", "在线生成并编辑教学课件", "课件辅助"),
+    "review-skill": ("审题破题训练", "训练题干识别、条件提取和切入点", "审题训练"),
+    "big-question": ("主观题采分拆解", "按步骤拆出规范答案与评分点", "解题拆解"),
+    "word-paper": ("英语词汇组卷", "生成词汇练习与答案Word", "语言训练"),
+    "coverage-check": ("考点覆盖扫描", "检查试卷考点、难度与遗漏", "备考规划"),
+    "sprint-plan": ("临考冲刺规划", "依据薄弱项生成冲刺计划", "备考规划"),
+    "class-notes": ("课堂纪要整理", "把课堂材料整理为结构化笔记", "课件辅助"),
+    "preview-sheet": ("课前预习助手", "生成目标、问题链和预习单", "预习辅助"),
+    "loss-analysis": ("失分原因诊断", "归类知识、方法、计算与表达失分", "学情诊断"),
+    "question-sense": ("题型直觉训练", "训练题型辨识和母题调用", "审题训练"),
+    "knowledge-map": ("知识图谱绘制", "生成知识关系图谱与配图", "配图生成"),
+    "ten-solutions": ("一题多解探索", "比较多种路径、条件与适用边界", "解题拆解"),
+    "knowledge-explain": ("概念精讲助手", "生成例题、反例与通俗讲解", "概念讲解"),
+    "essay-polish": ("表达润色教练", "改进作文表达并说明修改依据", "语言训练"),
+    "score-action": ("提分行动路线图", "把学情诊断转成每日行动清单", "备考规划"),
+}
+PORTAL_TOOLS = [
+    {**tool, "label": _TOOL_ZH[tool["id"]][0], "tagline": _TOOL_ZH[tool["id"]][1], "category": _TOOL_ZH[tool["id"]][2]}
+    for tool in PORTAL_TOOLS
 ]
 
 
@@ -545,6 +581,23 @@ def verify_unified_token_remote(token: str) -> dict | None:
     }
 
 
+def unified_org_user(headers) -> dict | None:
+    token = bearer_token(headers)
+    if not token:
+        return None
+    claims = verify_unified_token_remote(token)
+    if not claims:
+        return None
+    return {
+        "username": str(claims.get("username") or claims.get("sub") or "").strip(),
+        "name": str(claims.get("name") or "").strip(),
+        "role": str(claims.get("role") or "USER").upper(),
+    }
+
+
+org_inst_store.set_unified_auth_resolver(unified_org_user)
+
+
 def unified_email_from_claims(claims: dict) -> str:
     email = str(claims.get("email") or "").strip().lower()
     if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
@@ -717,6 +770,64 @@ def init_db() -> None:
               updated_at text not null
             );
 
+            create table if not exists exam_papers (
+              id text primary key,
+              user_id text,
+              title text not null,
+              subject text,
+              status text not null,
+              source_name text,
+              summary text,
+              progress integer not null default 0,
+              error text,
+              created_at text not null,
+              updated_at text not null
+            );
+
+            create table if not exists paper_pages (
+              id text primary key,
+              paper_id text not null,
+              page_no integer not null,
+              source_url text,
+              source_text text,
+              ocr_result text,
+              confidence real not null default 0,
+              foreign key(paper_id) references exam_papers(id)
+            );
+
+            create table if not exists paper_questions (
+              id text primary key,
+              paper_id text not null,
+              page_id text,
+              question_no text not null,
+              printed_text text not null,
+              student_work text,
+              teacher_marks text,
+              answer_state text not null,
+              score real,
+              max_score real,
+              confidence real not null default 0,
+              bbox text,
+              eight_steps text,
+              diagnosis text,
+              wrong_question_id text,
+              review_required integer not null default 0,
+              created_at text not null,
+              foreign key(paper_id) references exam_papers(id)
+            );
+
+            create table if not exists paper_jobs (
+              id text primary key,
+              paper_id text not null,
+              status text not null,
+              progress integer not null default 0,
+              message text,
+              attempts integer not null default 0,
+              created_at text not null,
+              updated_at text not null,
+              foreign key(paper_id) references exam_papers(id)
+            );
+
             create table if not exists wrong_questions (
               id text primary key,
               image_url text,
@@ -886,12 +997,26 @@ def init_db() -> None:
         ensure_table_column(conn, "tool_runs", "report", "text")
         ensure_table_column(conn, "app_users", "is_admin", "integer not null default 0")
         ensure_table_column(conn, "wrong_questions", "user_id", "text")
+        ensure_table_column(conn, "wrong_questions", "institution_id", "text")
+        ensure_table_column(conn, "wrong_questions", "institution_name", "text")
+        ensure_table_column(conn, "wrong_questions", "institution_badge", "text")
+        ensure_table_column(conn, "wrong_questions", "error_type", "text")
+        ensure_table_column(conn, "wrong_questions", "mastery_score", "integer not null default 0")
+        ensure_table_column(conn, "wrong_questions", "review_stage", "integer not null default 0")
+        ensure_table_column(conn, "wrong_questions", "next_review_at", "text")
+        ensure_table_column(conn, "wrong_questions", "last_reviewed_at", "text")
+        ensure_table_column(conn, "wrong_questions", "workflow_state", "text not null default 'diagnosed'")
+        ensure_table_column(conn, "student_answers", "hint_count", "integer not null default 0")
         ensure_table_column(conn, "profile_exports", "user_id", "text")
         ensure_table_column(conn, "profile_shares", "audience", "text")
         ensure_table_column(conn, "profile_shares", "note", "text")
         ensure_table_column(conn, "profile_shares", "permissions", "text")
         ensure_table_column(conn, "profile_shares", "last_viewed_at", "text")
         ensure_table_column(conn, "profile_shares", "expires_at", "text")
+        ensure_table_column(conn, "mother_questions", "code", "text")
+        ensure_table_column(conn, "mother_questions", "name", "text not null default '未命名母题'")
+        ensure_table_column(conn, "mother_questions", "status", "text not null default 'review_required'")
+        ensure_table_column(conn, "mother_questions", "metadata", "text")
         ensure_table_column(conn, "mother_questions", "created_at", "text not null default ''")
         ensure_admin_user(conn)
 
@@ -1428,6 +1553,19 @@ def extract_json(text: str) -> dict:
         if start >= 0 and end > start:
             return json.loads(clean[start : end + 1])
         raise
+
+
+PAPER_OCR_PROMPT = """你是全卷分析 OCR 与阅卷助手。只根据试卷页面识别，不编造。
+识别印刷题干、题号、分值、选项、学生手写笔迹、演算过程、红叉/勾/圈画、教师批语和得分。
+把页面切分为独立题目；跨页题要标记 continuation=true。无法确认的字符使用 [?]。
+判断每题状态：correct、wrong、partial、blank、review_required。低置信度必须使用 review_required。
+严格输出 JSON：
+{"page_text":"", "page_confidence":0.0, "questions":[{
+ "question_no":"1", "printed_text":"", "student_work":"", "teacher_marks":"",
+ "answer_state":"review_required", "score":null, "max_score":null,
+ "confidence":0.0, "bbox":[0,0,1,1], "continuation":false
+}]}
+"""
 
 
 def run_ocr(image_data_url: str, model_id: str | None = None) -> dict:
@@ -1990,23 +2128,43 @@ def build_profile_markdown(conn: sqlite3.Connection, data: dict, user: dict | No
 
 
 def update_pass_status(conn: sqlite3.Connection, wrong_id: str) -> None:
-    variants = conn.execute("select id from exercise_variants where wrong_question_id = ?", (wrong_id,)).fetchall()
+    wrong = conn.execute(
+        "select review_stage from wrong_questions where id = ?", (wrong_id,)
+    ).fetchone()
+    variants = conn.execute(
+        "select id, level from exercise_variants where wrong_question_id = ?", (wrong_id,)
+    ).fetchall()
     if len(variants) < 3:
         return
-    correct_count = 0
+    results = []
     for variant in variants:
         row = conn.execute(
             """
-            select is_correct from student_answers
+            select is_correct, hint_count from student_answers
             where exercise_variant_id = ?
             order by submitted_at desc limit 1
             """,
             (variant["id"],),
         ).fetchone()
-        if row and row["is_correct"]:
-            correct_count += 1
-    if correct_count >= PASS_REQUIRED_CORRECT:
-        conn.execute("update wrong_questions set status = ? where id = ?", ("passed", wrong_id))
+        results.append({
+            "level": variant["level"],
+            "is_correct": bool(row and row["is_correct"]),
+            "hint_count": int(row["hint_count"] or 0) if row else 0,
+        })
+    state = transition(results, int(wrong["review_stage"] or 0) if wrong else 0)
+    public_status = "passed" if state["state"] == "mastered" else state["state"]
+    conn.execute(
+        """
+        update wrong_questions
+        set status = ?, workflow_state = ?, mastery_score = ?, review_stage = ?,
+            next_review_at = ?, last_reviewed_at = ?
+        where id = ?
+        """,
+        (
+            public_status, state["state"], state["mastery_score"], state["review_stage"],
+            state["next_review_at"], state["last_reviewed_at"], wrong_id,
+        ),
+    )
 
 
 def build_report(conn: sqlite3.Connection, user: dict | None) -> dict:
@@ -2854,6 +3012,7 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
             diagnosis.get("core_pattern") or diagnosis.get("topic") or "é¢˜ç›®æ‹†è§£",
             item.get("corrected_text") or "", item.get("created_at"),
             wrong_question_id=item["id"], subject=clean_subject_name(diagnosis.get("subject")), status=item.get("status"),
+            institution_id=item.get("institution_id"), institution_name=item.get("institution_name"), institution_badge=item.get("institution_badge"),
         ))
     for row in conn.execute(f"""
         select v.*, w.diagnosis from exercise_variants v
@@ -2938,6 +3097,22 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
     for item in items:
         counts[item["type"]] = counts.get(item["type"], 0) + 1
     return {"items": items, "counts": counts, "total": len(items)}
+
+
+def institution_context_for_app_user(user: dict | None) -> dict:
+    if not user:
+        return {}
+    store = org_inst_store.load_store()
+    email = str(user.get("email") or "").strip()
+    member = org_inst_store.find_member_by_username(store, email)
+    if not member:
+        return {}
+    inst = org_inst_store.get_institution_by_id(store, member.get("institution_id"))
+    return {
+        "institution_id": member.get("institution_id") or "",
+        "institution_name": member.get("institution_name") or (inst or {}).get("name") or "",
+        "institution_badge": member.get("institution_badge") or (inst or {}).get("name") or "",
+    }
 
 
 def masked_email(value: str | None) -> str:
@@ -3172,6 +3347,264 @@ def public_app_config() -> dict:
     }
 
 
+def run_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
+    with db() as conn:
+        model = get_vision_model(conn, model_id)
+    content = [
+        {"type": "text", "text": PAPER_OCR_PROMPT},
+        {"type": "image_url", "image_url": {"url": image_data_url, "detail": "high", "max_long_side_pixel": 2200}},
+    ]
+    raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=7000, temperature=0.1)
+    result = extract_json(raw)
+    result.setdefault("questions", [])
+    result.setdefault("page_confidence", 0.0)
+    return result
+
+
+def image_url_to_data_url(source_url: str) -> str:
+    relative = str(source_url or "").split("?", 1)[0].lstrip("/")
+    path = PUBLIC_DIR / relative
+    if not path.exists():
+        raise ValueError("试卷页面原图不存在")
+    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+
+
+def build_eight_steps(diagnosis: dict, question: dict) -> list[dict]:
+    decomposition = diagnosis.get("decomposition") or {}
+    analysis = diagnosis.get("student_answer_analysis") or {}
+    strategy = diagnosis.get("learning_strategy") or {}
+    standard = diagnosis.get("standard_answer") or {}
+    supplied = [
+        {"key": "understand", "content": diagnosis.get("problem_goal") or question.get("printed_text")},
+        {"key": "conditions", "content": decomposition.get("total_formula") or diagnosis.get("cleaned_question")},
+        {"key": "knowledge", "content": "；".join(diagnosis.get("knowledge_points") or [])},
+        {"key": "diagnose", "content": analysis.get("likely_issue"), "evidence": analysis.get("evidence") or []},
+        {"key": "model", "content": strategy.get("entry_point") or diagnosis.get("core_pattern")},
+        {"key": "solve", "content": standard.get("concise_solution") or "\n".join(str(x) for x in decomposition.get("step_formulas") or [])},
+        {"key": "verify", "content": standard.get("final_answer") or "代入、单位、边界与逻辑校核"},
+        {"key": "transfer", "content": strategy.get("make_it_easier") or "完成同型巩固、轻微变式与综合迁移"},
+    ]
+    return normalize_eight_steps({"eight_steps": supplied})
+
+
+def ensure_gaokao_mother_catalog(conn: sqlite3.Connection) -> None:
+    """幂等写入高考题型模型；后续教研导入不会被覆盖。"""
+    columns = {row["name"] for row in conn.execute("pragma table_info(mother_questions)").fetchall()}
+    for item in SEED_MOTHER_QUESTIONS:
+        if conn.execute("select 1 from mother_questions where code=? limit 1", (item["code"],)).fetchone():
+            continue
+        metadata = {key: value for key, value in item.items() if key not in {"code", "name"}}
+        values = {
+            "id": str(uuid.uuid4()), "code": item["code"], "name": item["name"],
+            "topic": item["name"], "difficulty": 3,
+            "recognition_signals": json.dumps(item.get("keywords") or [], ensure_ascii=False),
+            "knowledge_points": json.dumps(item.get("keywords") or [], ensure_ascii=False),
+            "solution_steps": json.dumps([item.get("formula") or ""], ensure_ascii=False),
+            "common_error_causes": json.dumps(item.get("reminders") or [], ensure_ascii=False),
+            "mnemonic": item.get("formula") or "", "status": "seed_verified",
+            "metadata": json.dumps(metadata, ensure_ascii=False), "created_at": now_iso(),
+        }
+        names = [name for name in values if name in columns]
+        conn.execute(
+            f"insert into mother_questions ({','.join(names)}) values ({','.join('?' for _ in names)})",
+            [values[name] for name in names],
+        )
+
+
+def enrich_gaokao_diagnosis(question: dict, diagnosis: dict, subject: str) -> dict:
+    mother = match_mother_question(question.get("printed_text") or "", subject)
+    enriched = dict(diagnosis or {})
+    enriched["gaokao_card"] = build_gaokao_card(question, enriched, mother)
+    enriched["mother_question"] = mother
+    return enriched
+
+
+def fallback_paper_diagnosis(question: dict, error: Exception) -> dict:
+    text = question.get("printed_text") or ""
+    work = question.get("student_work") or ""
+    return {
+        "cleaned_question": text,
+        "subject": "待确认",
+        "topic": "模型结果待复核",
+        "difficulty": 1,
+        "confidence": 0.5,
+        "core_pattern": "待教师复核题型",
+        "knowledge_points": [],
+        "problem_goal": "根据题干确定问题目标",
+        "student_answer_analysis": {
+            "answer_presence": "已提供" if work else "未提供",
+            "extracted_work": work,
+            "answer_status": "待复核",
+            "likely_issue": "模型输出格式异常，已保留原题与作答，请人工确认",
+            "evidence": [str(question.get("teacher_marks") or "").strip()] if question.get("teacher_marks") else [],
+            "next_action": "确认题干、作答与批改痕迹后重新分析",
+        },
+        "learning_strategy": {
+            "decomposition_answer": "先确认题意，再提取条件、选择方法、分步求解并验算",
+            "make_it_easier": "先完成同知识点基础题，再回到原题",
+            "entry_point": "确认题目条件和设问",
+        },
+        "decomposition": {"total_formula": "读题→条件→知识点→方法→求解→验算", "step_formulas": []},
+        "standard_answer": {"final_answer": "待复核", "concise_solution": "待重新分析"},
+        "practice_variants": [],
+        "needs_review": True,
+        "model_error": str(error),
+    }
+
+
+def paper_owner_clause(user: dict | None) -> tuple[str, list]:
+    if user and user_is_admin(user):
+        return "", []
+    if user:
+        return " and user_id = ?", [user["id"]]
+    return " and user_id is null", []
+
+
+def get_paper(conn: sqlite3.Connection, paper_id: str, user: dict | None) -> dict | None:
+    owner_sql, params = paper_owner_clause(user)
+    row = conn.execute(f"select * from exam_papers where id = ?{owner_sql}", [paper_id, *params]).fetchone()
+    if not row:
+        return None
+    item = row_to_dict(row)
+    item["summary"] = item.get("summary") if isinstance(item.get("summary"), dict) else json.loads(item.get("summary") or "{}")
+    questions = []
+    for qrow in conn.execute("select * from paper_questions where paper_id = ? order by cast(question_no as integer), question_no", (paper_id,)).fetchall():
+        q = row_to_dict(qrow)
+        q["bbox"] = q.get("bbox") if isinstance(q.get("bbox"), (list, dict)) else json.loads(q.get("bbox") or "null")
+        q["eight_steps"] = q.get("eight_steps") if isinstance(q.get("eight_steps"), list) else json.loads(q.get("eight_steps") or "[]")
+        q["diagnosis"] = q.get("diagnosis") if isinstance(q.get("diagnosis"), dict) else json.loads(q.get("diagnosis") or "{}")
+        questions.append(q)
+    item["questions"] = questions
+    item["pages"] = [row_to_dict(x) for x in conn.execute("select * from paper_pages where paper_id = ? order by page_no", (paper_id,)).fetchall()]
+    return item
+
+
+def persist_wrong_from_paper(conn: sqlite3.Connection, paper_id: str, question_id: str, user_id: str | None, question: dict, diagnosis: dict) -> str:
+    wrong_id = str(uuid.uuid4())
+    confidence = float(diagnosis.get("confidence") or question.get("confidence") or 0.7)
+    error_type = normalize_error_type((diagnosis.get("student_answer_analysis") or {}).get("likely_issue"))
+    model = get_model(conn, None)
+    conn.execute(
+        """insert into wrong_questions
+        (id,image_url,ocr_text,corrected_text,student_wrong_answer,model_id,diagnosis,status,confidence,user_id,error_type,workflow_state,created_at)
+        values (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (wrong_id, None, question.get("printed_text"), question.get("printed_text") or "",
+         question.get("student_work") or "", model["id"], json.dumps(diagnosis, ensure_ascii=False),
+         "review_needed" if question.get("review_required") else "diagnosed", confidence, user_id,
+         error_type, "diagnosed", now_iso()),
+    )
+    save_variants(conn, wrong_id, diagnosis)
+    return wrong_id
+
+
+def process_paper_job(paper_id: str, model_id: str | None = None) -> None:
+    try:
+        with db() as conn:
+            ensure_gaokao_mother_catalog(conn)
+            paper = conn.execute("select * from exam_papers where id = ?", (paper_id,)).fetchone()
+            pages = conn.execute("select * from paper_pages where paper_id = ? order by page_no", (paper_id,)).fetchall()
+            conn.execute("update exam_papers set status='processing',progress=2,updated_at=? where id=?", (now_iso(), paper_id))
+            conn.execute("update paper_jobs set status='processing',progress=2,attempts=attempts+1,updated_at=? where paper_id=?", (now_iso(), paper_id))
+        extracted = []
+        for index, page in enumerate(pages, start=1):
+            if page["source_url"]:
+                result = run_paper_ocr(image_url_to_data_url(page["source_url"]), model_id)
+                questions = result.get("questions") or []
+            else:
+                result = {"page_text": page["source_text"] or "", "page_confidence": 0.82}
+                questions = split_numbered_questions(page["source_text"] or "")
+            with db() as conn:
+                conn.execute("update paper_pages set ocr_result=?,confidence=? where id=?", (json.dumps(result, ensure_ascii=False), float(result.get("page_confidence") or 0), page["id"]))
+            for question in questions:
+                question["page_id"] = page["id"]
+                extracted.append(question)
+            progress = min(45, round(index / max(1, len(pages)) * 45))
+            with db() as conn:
+                conn.execute("update exam_papers set progress=?,updated_at=? where id=?", (progress, now_iso(), paper_id))
+                conn.execute("update paper_jobs set progress=?,updated_at=? where paper_id=?", (progress, now_iso(), paper_id))
+        for index, question in enumerate(extracted, start=1):
+            state = normalize_answer_state(question.get("answer_state"), question.get("score"), question.get("max_score"))
+            confidence = float(question.get("confidence") or 0.55)
+            review_required = state == "review_required" or confidence < 0.72
+            diagnosis = {}
+            steps = []
+            wrong_id = None
+            if state != "correct":
+                try:
+                    diagnosis = diagnose_with_llm(question.get("printed_text") or "", question.get("student_work") or question.get("teacher_marks") or "", "", model_id, paper["subject"] or "自动识别")
+                except Exception as exc:
+                    diagnosis = fallback_paper_diagnosis(question, exc)
+                    review_required = True
+                diagnosis = enrich_gaokao_diagnosis(question, diagnosis, paper["subject"] or "自动识别")
+                steps = build_eight_steps(diagnosis, question)
+            qid = str(uuid.uuid4())
+            with db() as conn:
+                if state != "correct":
+                    wrong_id = persist_wrong_from_paper(conn, paper_id, qid, paper["user_id"], {**question, "review_required": review_required}, diagnosis)
+                conn.execute(
+                    """insert into paper_questions
+                    (id,paper_id,page_id,question_no,printed_text,student_work,teacher_marks,answer_state,score,max_score,confidence,bbox,eight_steps,diagnosis,wrong_question_id,review_required,created_at)
+                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (qid,paper_id,question.get("page_id"),str(question.get("question_no") or index),question.get("printed_text") or "",question.get("student_work") or "",question.get("teacher_marks") or "",state,question.get("score"),question.get("max_score"),confidence,json.dumps(question.get("bbox"),ensure_ascii=False),json.dumps(steps,ensure_ascii=False),json.dumps(diagnosis,ensure_ascii=False),wrong_id,1 if review_required else 0,now_iso()),
+                )
+                progress = 45 + round(index / max(1, len(extracted)) * 50)
+                conn.execute("update exam_papers set progress=?,updated_at=? where id=?", (progress, now_iso(), paper_id))
+                conn.execute("update paper_jobs set progress=?,updated_at=? where paper_id=?", (progress, now_iso(), paper_id))
+        with db() as conn:
+            rows = [row_to_dict(r) for r in conn.execute("select * from paper_questions where paper_id=?", (paper_id,)).fetchall()]
+            summary = paper_summary(rows)
+            matched = 0
+            for row in rows:
+                diag = json.loads(row.get("diagnosis") or "{}") if not isinstance(row.get("diagnosis"), dict) else row.get("diagnosis")
+                if diag.get("mother_question"):
+                    matched += 1
+            summary["mother_matched_count"] = matched
+            summary["knowledge_card_count"] = sum(1 for row in rows if row.get("answer_state") != "correct")
+            conn.execute("update exam_papers set status='completed',summary=?,progress=100,updated_at=? where id=?", (json.dumps(summary,ensure_ascii=False),now_iso(),paper_id))
+            conn.execute("update paper_jobs set status='completed',progress=100,message='分析完成',updated_at=? where paper_id=?", (now_iso(),paper_id))
+    except Exception as exc:
+        with db() as conn:
+            conn.execute("update exam_papers set status='failed',error=?,updated_at=? where id=?", (str(exc),now_iso(),paper_id))
+            conn.execute("update paper_jobs set status='failed',message=?,updated_at=? where paper_id=?", (str(exc),now_iso(),paper_id))
+
+
+def build_paper_docx(paper: dict) -> bytes:
+    from docx import Document
+    doc = Document()
+    doc.add_heading(paper.get("title") or "全卷分析报告", 0)
+    summary = paper.get("summary") or {}
+    doc.add_paragraph(f"题目总数：{summary.get('total_questions',0)}　错题/待复核：{summary.get('wrong_count',0)}　得分率：{summary.get('score_rate','-')}%")
+    for q in paper.get("questions") or []:
+        doc.add_heading(f"第 {q.get('question_no')} 题｜{q.get('answer_state')}", level=1)
+        doc.add_paragraph(q.get("printed_text") or "")
+        if q.get("student_work"): doc.add_paragraph("学生作答：" + q["student_work"])
+        if q.get("teacher_marks"): doc.add_paragraph("批改痕迹：" + q["teacher_marks"])
+        for step in q.get("eight_steps") or []:
+            doc.add_heading(f"{step.get('number')}. {step.get('label')}", level=2)
+            doc.add_paragraph(step.get("content") or "待复核")
+    stream = BytesIO(); doc.save(stream); return stream.getvalue()
+
+
+def build_paper_pdf(paper: dict) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    stream = BytesIO(); styles = getSampleStyleSheet()
+    for style in styles.byName.values(): style.fontName = 'STSong-Light'
+    story = [Paragraph(paper.get("title") or "全卷分析报告", styles['Title']), Spacer(1, 12)]
+    summary = paper.get("summary") or {}
+    story.append(Paragraph(f"题目总数：{summary.get('total_questions',0)}　错题/待复核：{summary.get('wrong_count',0)}　得分率：{summary.get('score_rate','-')}%", styles['BodyText']))
+    for q in paper.get("questions") or []:
+        story += [Spacer(1, 12), Paragraph(f"第 {q.get('question_no')} 题｜{q.get('answer_state')}", styles['Heading2']), Paragraph((q.get("printed_text") or "").replace('\n','<br/>'), styles['BodyText'])]
+        for step in q.get("eight_steps") or []:
+            story.append(Paragraph(f"{step.get('number')}. {step.get('label')}：{step.get('content') or '待复核'}", styles['BodyText']))
+    SimpleDocTemplate(stream, pagesize=A4).build(story); return stream.getvalue()
+
+
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "GaokaoMVP/0.2"
 
@@ -3211,7 +3644,16 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+        body = self.rfile.read(length) if length else b"{}"
+        raw = None
+        for encoding in ("utf-8-sig", "utf-16", "gb18030"):
+            try:
+                raw = body.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if raw is None:
+            raise ValueError("请求内容编码无法识别，请使用 UTF-8")
         return json.loads(raw or "{}")
 
     def send_json(self, payload: dict | list, status: int = 200) -> None:
@@ -3222,8 +3664,24 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_bytes(self, body: bytes, content_type: str, filename: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def handle_api_get(self, path: str, query: dict) -> None:
         try:
+            def platform_admin_ok() -> bool:
+                with db() as conn:
+                    return user_is_admin(current_user_from_request(conn, self.headers))
+
+            org_resp = org_inst_store.handle_org_api("GET", path, self.headers, None, platform_admin_ok)
+            if org_resp:
+                self.send_json(org_resp[1], org_resp[0])
+                return
             if path == "/api/aippt/code":
                 uid = (query.get("uid") or [""])[0].strip() or None
                 self.send_json(aippt_auth.fetch_grant_code(uid=uid))
@@ -3244,6 +3702,30 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 if path == "/api/history":
                     self.send_json(build_generation_history(conn, user))
+                    return
+                if path == "/api/papers":
+                    owner_sql, params = paper_owner_clause(user)
+                    rows = conn.execute(f"select * from exam_papers where 1=1{owner_sql} order by created_at desc", params).fetchall()
+                    payload = []
+                    for row in rows:
+                        item = row_to_dict(row); item["summary"] = item.get("summary") if isinstance(item.get("summary"), dict) else json.loads(item.get("summary") or "{}"); payload.append(item)
+                    self.send_json(payload)
+                    return
+                paper_match = re.fullmatch(r"/api/papers/([^/]+)", path)
+                if paper_match:
+                    item = get_paper(conn, paper_match.group(1), user)
+                    self.send_json(item if item else {"error":"not found"}, 200 if item else 404)
+                    return
+                export_match = re.fullmatch(r"/api/papers/([^/]+)/export/(docx|pdf)", path)
+                if export_match:
+                    item = get_paper(conn, export_match.group(1), user)
+                    if not item:
+                        self.send_json({"error":"not found"},404); return
+                    fmt = export_match.group(2)
+                    if fmt == "docx":
+                        self.send_bytes(build_paper_docx(item), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", f"{item['title']}-全卷分析.docx")
+                    else:
+                        self.send_bytes(build_paper_pdf(item), "application/pdf", f"{item['title']}-全卷分析.pdf")
                     return
                 if path == "/api/rag/documents":
                     where, params = rag_user_filter(user)
@@ -3315,8 +3797,25 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json([row_to_dict(row) for row in rows])
                     return
                 if path == "/api/mother-questions":
+                    ensure_gaokao_mother_catalog(conn)
                     rows = conn.execute("select * from mother_questions order by created_at desc").fetchall()
                     self.send_json([row_to_dict(row) for row in rows])
+                    return
+                if path == "/api/wrong-questions/due":
+                    if not user:
+                        self.send_json([])
+                        return
+                    owner_sql, params = ("", []) if user_is_admin(user) else (" and user_id = ?", [user["id"]])
+                    rows = conn.execute(
+                        f"""
+                        select id from wrong_questions
+                        where workflow_state = 'review_scheduled'
+                          and next_review_at is not null and next_review_at <= ?{owner_sql}
+                        order by next_review_at asc
+                        """,
+                        [now_iso(), *params],
+                    ).fetchall()
+                    self.send_json([get_wrong_question(conn, row["id"]) for row in rows])
                     return
                 if path == "/api/wrong-questions":
                     ids_param = (query.get("ids") or [""])[0]
@@ -3402,6 +3901,52 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_api_post(self, path: str) -> None:
         try:
+            def platform_admin_ok() -> bool:
+                with db() as conn:
+                    return user_is_admin(current_user_from_request(conn, self.headers))
+
+            org_resp = org_inst_store.handle_org_api("POST", path, self.headers, self.read_json, platform_admin_ok)
+            if org_resp:
+                self.send_json(org_resp[1], org_resp[0])
+                return
+            if path == "/api/papers":
+                data = self.read_json()
+                def request_text(value, default=""):
+                    if value is None: return default
+                    if isinstance(value, str): return value
+                    return json.dumps(value, ensure_ascii=False)
+                title = request_text(data.get("title") or data.get("source_name"), "未命名试卷").strip()
+                pages = data.get("pages") or []
+                if data.get("paper_text"):
+                    pages = [{"text": data.get("paper_text")}]
+                if not pages:
+                    self.send_json({"error":"请上传至少一页试卷或提供试卷文本"},400); return
+                paper_id, job_id, ts = str(uuid.uuid4()), str(uuid.uuid4()), now_iso()
+                with db() as conn:
+                    user = current_user_from_request(conn, self.headers)
+                    conn.execute("insert into exam_papers (id,user_id,title,subject,status,source_name,summary,progress,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?)",
+                                 (paper_id,request_text(user.get("id")) if user else None,title,request_text(data.get("subject"),"自动识别"),"queued",request_text(data.get("source_name"),title),"{}",0,ts,ts))
+                    for page_no, page in enumerate(pages, start=1):
+                        if not isinstance(page, dict): page = {"text": request_text(page)}
+                        source_url = save_data_url(page.get("image_data_url")) if page.get("image_data_url") else None
+                        conn.execute("insert into paper_pages (id,paper_id,page_no,source_url,source_text,ocr_result,confidence) values (?,?,?,?,?,?,?)",
+                                     (str(uuid.uuid4()),paper_id,page_no,source_url,request_text(page.get("text")),"{}",0))
+                    conn.execute("insert into paper_jobs (id,paper_id,status,progress,message,attempts,created_at,updated_at) values (?,?,?,?,?,?,?,?)",
+                                 (job_id,paper_id,"queued",0,"等待分析",0,ts,ts))
+                threading.Thread(target=process_paper_job,args=(paper_id,data.get("model_id")),daemon=True,name=f"paper-{paper_id[:8]}").start()
+                self.send_json({"id":paper_id,"job_id":job_id,"status":"queued","progress":0},202)
+                return
+            retry_match = re.fullmatch(r"/api/papers/([^/]+)/retry", path)
+            if retry_match:
+                with db() as conn:
+                    user = current_user_from_request(conn,self.headers)
+                    paper = get_paper(conn,retry_match.group(1),user)
+                    if not paper: self.send_json({"error":"not found"},404); return
+                    conn.execute("delete from paper_questions where paper_id=?",(paper["id"],))
+                    conn.execute("update exam_papers set status='queued',progress=0,error=null,updated_at=? where id=?",(now_iso(),paper["id"]))
+                    conn.execute("update paper_jobs set status='queued',progress=0,message='重新分析',updated_at=? where paper_id=?",(now_iso(),paper["id"]))
+                threading.Thread(target=process_paper_job,args=(paper["id"],None),daemon=True).start()
+                self.send_json({"id":paper["id"],"status":"queued"},202); return
             if path == "/api/register":
                 self.register_user()
                 return
@@ -3830,19 +4375,26 @@ class AppHandler(BaseHTTPRequestHandler):
         model_id = data.get("model_id")
         subject = data.get("subject") or "è‡ªåŠ¨è¯†åˆ«"
         diagnosis = diagnose_with_llm(text, wrong_answer, ocr_text, model_id, subject)
+        answer_analysis = diagnosis.setdefault("student_answer_analysis", {})
+        error_type = normalize_error_type(answer_analysis.get("error_type") or answer_analysis.get("likely_issue"))
+        answer_analysis["error_type"] = error_type
+        for index, variant in enumerate(diagnosis.get("practice_variants") or [], start=1):
+            variant["tier"] = practice_tier(index)
         wrong_id = str(uuid.uuid4())
         confidence = float(diagnosis.get("confidence") or 0.75)
         status = "review_needed" if diagnosis.get("needs_review") else "diagnosed"
         with db() as conn:
             user = current_user_from_request(conn, self.headers)
             user_id = user["id"] if user else None
+            org_ctx = institution_context_for_app_user(user)
             actual_model = get_model(conn, model_id)
             conn.execute(
                 """
                 insert into wrong_questions
                 (id, image_url, ocr_text, corrected_text, student_wrong_answer, model_id,
-                 diagnosis, status, confidence, user_id, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 diagnosis, status, confidence, user_id, institution_id, institution_name,
+                 institution_badge, error_type, workflow_state, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     wrong_id,
@@ -3855,6 +4407,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     status,
                     confidence,
                     user_id,
+                    org_ctx.get("institution_id") or None,
+                    org_ctx.get("institution_name") or None,
+                    org_ctx.get("institution_badge") or None,
+                    error_type,
+                    "diagnosed",
                     now_iso(),
                 ),
             )
@@ -3890,6 +4447,7 @@ class AppHandler(BaseHTTPRequestHandler):
         data = self.read_json()
         answer_text = (data.get("answer_text") or "").strip()
         model_id = data.get("model_id")
+        hint_count = max(0, min(int(data.get("hint_count") or 0), 3))
         with db() as conn:
             variant = row_to_dict(conn.execute("select * from exercise_variants where id = ?", (variant_id,)).fetchone())
             if not variant:
@@ -3902,8 +4460,8 @@ class AppHandler(BaseHTTPRequestHandler):
             conn.execute(
                 """
                 insert into student_answers
-                (id, exercise_variant_id, answer_text, grading_result, is_correct, submitted_at)
-                values (?, ?, ?, ?, ?, ?)
+                (id, exercise_variant_id, answer_text, grading_result, is_correct, hint_count, submitted_at)
+                values (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     answer_id,
@@ -3911,6 +4469,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     answer_text,
                     json.dumps(result, ensure_ascii=False),
                     1 if result["is_correct"] else 0,
+                    hint_count,
                     now_iso(),
                 ),
             )
@@ -3941,6 +4500,10 @@ class AppHandler(BaseHTTPRequestHandler):
     def serve_static(self, path: str) -> None:
         if path == "/":
             path = "/index.html"
+        if path == "/org":
+            path = "/org.html"
+        if path == "/org-admin":
+            path = "/org-admin.html"
         safe_path = path.lstrip("/").replace("..", "")
         file_path = PUBLIC_DIR / safe_path
         if not file_path.exists() or not file_path.is_file():

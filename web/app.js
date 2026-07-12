@@ -24,6 +24,10 @@ const state = {
   ragDocuments: [],
   ragHits: [],
   studentMode: true,
+  papers: [],
+  workMode: localStorage.getItem("edu-work-mode") === "teacher" ? "teacher" : "student",
+  activePaper: null,
+  paperPollTimer: null,
   appConfig: { use_unified_auth: true, unified_auth_url: "https://ai.ms1001.com", platform_id: "edu.ms1001.com", local_auth_enabled: true },
 };
 
@@ -37,6 +41,169 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const FILE_ACCEPT = ".pdf,.docx,.txt,.md,.csv,.json,image/*";
+
+const PAPER_STATE_LABELS = { correct:"正确", wrong:"错误", partial:"部分正确", blank:"空白", review_required:"需复核" };
+
+function prepareChineseWorkbench() {
+  document.documentElement.lang = "zh-CN";
+  document.title = "错题拆博士｜学生与教师学习工作台";
+  const brand = $(".brand");
+  if (brand) brand.innerHTML = `<div class="mark">博</div><div><strong>错题拆博士</strong><span>让每一道错题都有结果</span></div>`;
+  const nav = $(".nav");
+  if (nav) nav.innerHTML = `
+    <button class="nav-item active" data-view="portal"><span class="nav-icon">首</span><span data-nav-label>学习首页</span></button>
+    <button class="nav-item nav-core" data-view="diagnose"><span class="nav-icon">析</span><span data-nav-label>试卷与错题分析</span></button>
+    <button class="nav-item" data-view="library"><span class="nav-icon">本</span><span data-nav-label>我的错题本</span></button>
+    <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>分析历史</span></button>
+    <button class="nav-item" data-view="report"><span class="nav-icon">报</span><span data-nav-label>学习报告</span></button>
+    <button class="nav-item" data-view="profile"><span class="nav-icon">档</span><span data-nav-label>档案与导出</span></button>
+    <button class="nav-item" data-view="tool"><span class="nav-icon">工</span><span data-nav-label>20个工作台</span></button>
+    <button class="nav-item hidden" id="adminNavItem" data-view="admin"><span class="nav-icon">管</span><span>后台管理</span></button>`;
+  if (nav) nav.insertAdjacentHTML("afterend", `<section class="sidebar-account" aria-label="个人账号">
+    <div class="sidebar-account-head"><span class="sidebar-avatar">我</span><div><strong id="sidebarAccountName">个人账号</strong><small id="sidebarAccountState">尚未登录</small></div></div>
+    <button id="sidebarLoginBtn" class="sidebar-action primary" type="button">登录 / 注册</button>
+    <div class="sidebar-quick-actions">
+      <button id="sidebarTrialBtn" type="button">免费体验</button><button id="sidebarRedeemBtn" type="button">积分兑换</button>
+      <button id="sidebarContactBtn" type="button">联系我们</button><button id="sidebarTermsBtn" type="button">服务与隐私</button>
+    </div>
+  </section>`);
+  const topTitle = $(".topbar h1"); if (topTitle) topTitle.textContent = "错题学习工作台";
+  const topEyebrow = $(".topbar .eyebrow"); if (topEyebrow) topEyebrow.textContent = "学生 · 教师共用";
+  const topSub = $(".topbar-subtitle"); if (topSub) topSub.textContent = "整卷识别、八步拆题、巩固训练、间隔复习与学习档案";
+  const topbar = $(".topbar");
+  if (topbar) topbar.insertAdjacentHTML("beforeend", `<div class="workspace-account"><span id="workspaceAccountText">尚未登录</span><button id="workspaceLoginBtn" class="primary-btn" type="button">登录 / 注册</button></div>`);
+  $(".tech-ribbon")?.remove();
+  $(".student-mode-toggle")?.remove();
+  $(".side-note")?.remove();
+  const institution = $(".institution-entry");
+  if (institution) institution.innerHTML = `<a href="/org" class="primary-btn">机构工作台</a><a href="/org-admin" class="ghost-btn">机构管理</a>`;
+  $(".portal-tools-panel")?.removeAttribute("data-student-hide");
+  applyWorkMode(state.workMode);
+}
+
+function applyWorkMode(mode) {
+  state.workMode = mode === "teacher" ? "teacher" : "student";
+  localStorage.setItem("edu-work-mode", state.workMode);
+  document.body.dataset.workMode = state.workMode;
+  $$('[data-work-mode]').forEach(btn => btn.classList.toggle("is-active", btn.dataset.workMode === state.workMode));
+  $("#studentDashboardActions")?.classList.toggle("hidden", state.workMode !== "student");
+  $("#teacherDashboardActions")?.classList.toggle("hidden", state.workMode !== "teacher");
+  const teacher = state.workMode === "teacher";
+  if ($("#dashboardKicker")) $("#dashboardKicker").textContent = teacher ? "今天需要处理什么？" : "今天从哪一步开始？";
+  if ($("#dashboardTitle")) $("#dashboardTitle").textContent = teacher ? "从一张试卷，看清每个学生的问题" : "把不会的题，真正练到会";
+  if ($("#dashboardLead")) $("#dashboardLead").textContent = teacher ? "批量分析试卷、复核识别结果、查看知识点失分，并导出可交付的教学报告。" : "上传整张试卷或一道错题，识别笔迹、定位错因、八步讲解，再进入巩固和复习。";
+  const labels = teacher
+    ? ["教学首页","试卷与错题分析","学生错题库","分析历史","学情报告","档案与导出","20个工作台"]
+    : ["学习首页","试卷与错题分析","我的错题本","分析历史","学习报告","档案与导出","20个工作台"];
+  $$(".nav-item [data-nav-label]").forEach((node,index) => { if (labels[index]) node.textContent=labels[index]; });
+  loadDashboard().catch(() => {});
+}
+
+async function loadDashboard() {
+  const [papers, wrongs] = await Promise.all([api("/api/papers"), fetchWrongQuestions()]);
+  state.papers = papers;
+  const now=Date.now();
+  const due=wrongs.filter(x=>x.workflow_state==="review_scheduled"&&x.next_review_at&&Date.parse(x.next_review_at)<=now);
+  const review=wrongs.filter(x=>x.status==="review_needed"||x.status==="remediation");
+  const mastered=wrongs.filter(x=>x.status==="passed"||x.workflow_state==="mastered");
+  $("#dashDueCount").textContent=due.length; $("#dashReviewCount").textContent=review.length; $("#dashMasteredCount").textContent=mastered.length; $("#dashPaperCount").textContent=papers.length;
+  const recent=$("#dashboardRecentList"); if (!recent) return;
+  const paperRows=papers.slice(0,3).map(p=>`<button type="button" data-recent-paper="${p.id}"><span class="recent-mark">卷</span><span><strong>${escapeHtml(p.title)}</strong><small>${escapeHtml(p.created_at||"")} · ${p.status==="completed"?"分析完成":p.status==="failed"?"分析失败":"正在分析"}</small></span><b>查看</b></button>`);
+  const wrongRows=wrongs.slice(0,3).map(w=>`<button type="button" data-recent-wrong="${w.id}"><span class="recent-mark">题</span><span><strong>${escapeHtml(w.diagnosis?.core_pattern||"错题分析")}</strong><small>${escapeHtml(subjectOf(w))} · ${statusText(w.status)}</small></span><b>继续</b></button>`);
+  recent.innerHTML=[...paperRows,...wrongRows].join("")||`<div class="dashboard-empty"><strong>还没有学习记录</strong><p>上传一张试卷或一道错题，开始第一次分析。</p></div>`;
+  recent.querySelectorAll("[data-recent-paper]").forEach(btn=>btn.addEventListener("click",async()=>{switchView("diagnose");const p=await api(`/api/papers/${btn.dataset.recentPaper}`);renderPaperResult(p);}));
+  recent.querySelectorAll("[data-recent-wrong]").forEach(btn=>btn.addEventListener("click",async()=>{switchView("diagnose");renderDiagnosis(await api(`/api/wrong-questions/${btn.dataset.recentWrong}`));}));
+}
+
+function bindDashboard() {
+  $$('[data-work-mode]').forEach(btn=>btn.addEventListener("click",()=>applyWorkMode(btn.dataset.workMode)));
+  $("#dashboardRefreshBtn")?.addEventListener("click",()=>loadDashboard().catch(err=>toast(err.message)));
+  $("#paperFilesInput")?.addEventListener("change", updatePaperSelection);
+  $("#workspaceLoginBtn")?.addEventListener("click",()=>state.appConfig.use_unified_auth?goUnifiedLogin("login"):openModal("authModal"));
+  $("#sidebarLoginBtn")?.addEventListener("click",()=>state.user?logoutPersonalAccount():openModal("authModal"));
+  $("#sidebarTrialBtn")?.addEventListener("click",()=>switchView("tool"));
+  $("#sidebarRedeemBtn")?.addEventListener("click",()=>openModal("redeemModal"));
+  $("#sidebarContactBtn")?.addEventListener("click",()=>openModal("contactModal"));
+  $("#sidebarTermsBtn")?.addEventListener("click",()=>showTerms("service"));
+  $$('[data-dashboard-action]').forEach(btn=>btn.addEventListener("click",()=>{
+    const action=btn.dataset.dashboardAction;
+    if (["paper","single","review"].includes(action)) { switchView("diagnose"); setTimeout(()=>$(action==="single"?".upload-panel":"#paperWorkbench")?.scrollIntoView({behavior:"smooth"}),50); }
+    else if (action==="library"||action==="today") switchView(action==="library"?"library":"portal");
+    else if (action==="report") switchView("report"); else if (action==="profile") switchView("profile");
+  }));
+}
+
+function logoutPersonalAccount(){ clearToken(); state.user=null; updateAccountCard(); toast("已退出登录。"); }
+
+async function createPaperAnalysis() {
+  const files = Array.from($("#paperFilesInput")?.files || []);
+  const paperText = $("#paperTextInput")?.value.trim() || "";
+  if (!files.length && !paperText) { toast("请上传试卷图片或粘贴整卷文本。"); return; }
+  const pages = [];
+  for (const file of files) {
+    if (file.type.startsWith("image/")) pages.push({ image_data_url: await readFileAsDataUrl(file), name:file.name });
+    else pages.push({ text: await file.text(), name:file.name });
+  }
+  renderPaperJob({ status:"uploading", progress:1, title:"正在上传并读取试卷" });
+  const done = setBusy($("#analyzePaperBtn"), "正在上传...");
+  try {
+    const result = await api("/api/papers", { method:"POST", body:JSON.stringify({
+      title: $("#paperTitleInput")?.value.trim() || files[0]?.name || "未命名试卷",
+      subject: $("#paperSubjectSelect")?.value || "自动识别",
+      source_name: files.map(f => f.name).join("、"), pages,
+      paper_text: paperText || undefined, model_id:selectedModelId(),
+    }) });
+    renderPaperJob({ status:"queued", progress:0, title:"全卷任务已创建" });
+    pollPaper(result.id);
+    await loadPapers();
+  } catch (err) { toast(err.message); } finally { done(); }
+}
+
+function renderPaperJob(paper) {
+  const root = $("#paperJobStatus"); if (!root) return;
+  root.classList.remove("hidden");
+  const labels={uploading:"正在上传",queued:"等待识别",processing:Number(paper.progress||0)<46?"正在识别题目和笔迹":"正在逐题分析",completed:"分析完成",failed:"分析失败"};
+  root.innerHTML = `<div><strong>${escapeHtml(paper.title || "全卷分析")}</strong><span><i class="recognition-spinner" aria-hidden="true"></i>${labels[paper.status]||"正在处理"} · ${Number(paper.progress || 0)}%</span></div><div class="paper-progress"><i style="width:${Number(paper.progress || 0)}%"></i></div><p class="paper-status-tip">${paper.status==="failed"?"请查看失败原因并重试。":"请保持页面打开；任务完成后会自动显示逐题结果。"}</p>${paper.error ? `<p class="text-error">失败原因：${escapeHtml(paper.error)}</p>` : ""}`;
+}
+
+function updatePaperSelection() {
+  const files=Array.from($("#paperFilesInput")?.files||[]); const root=$("#paperSelectedFiles"); if(!root)return;
+  root.innerHTML=files.length?`<strong>已选择 ${files.length} 个文件</strong>${files.map(f=>`<span>${escapeHtml(f.name)} · ${Math.max(1,Math.round(f.size/1024))} KB</span>`).join("")}`:`<span>尚未选择文件</span>`;
+  if(files.length&&!$("#paperTitleInput").value.trim()) $("#paperTitleInput").value=files[0].name.replace(/\.[^.]+$/,"");
+}
+
+async function pollPaper(id) {
+  clearTimeout(state.paperPollTimer);
+  try {
+    const paper = await api(`/api/papers/${id}`); renderPaperJob(paper);
+    if (paper.status === "completed") { state.activePaper = paper; renderPaperResult(paper); await loadPapers(); toast("全卷分析完成。"); return; }
+    if (paper.status === "failed") { await loadPapers(); return; }
+    state.paperPollTimer = setTimeout(() => pollPaper(id), 1800);
+  } catch (err) { toast(err.message); }
+}
+
+async function loadPapers() {
+  state.papers = await api("/api/papers");
+  const root = $("#paperHistoryList"); if (!root) return;
+  root.innerHTML = state.papers.length ? state.papers.map(p => `<article class="paper-history-card" data-paper-id="${p.id}"><div><strong>${escapeHtml(p.title)}</strong><span>${escapeHtml(p.created_at || "")} · ${escapeHtml(p.status)} · ${Number(p.progress || 0)}%</span></div><div><button class="ghost-btn paper-open" type="button">查看</button>${p.status === "failed" ? '<button class="ghost-btn paper-retry" type="button">重试</button>' : ""}</div></article>`).join("") : `<div class="empty-state compact-empty"><p>还没有全卷分析记录。</p></div>`;
+  root.querySelectorAll(".paper-open").forEach(btn => btn.addEventListener("click", async () => { const card=btn.closest("[data-paper-id]"); const paper=await api(`/api/papers/${card.dataset.paperId}`); state.activePaper=paper; renderPaperResult(paper); if (!["completed","failed"].includes(paper.status)) pollPaper(paper.id); }));
+  root.querySelectorAll(".paper-retry").forEach(btn => btn.addEventListener("click", async () => { const id=btn.closest("[data-paper-id]").dataset.paperId; await api(`/api/papers/${id}/retry`,{method:"POST",body:"{}"}); pollPaper(id); }));
+}
+
+function renderPaperResult(paper) {
+  const root = $("#paperResult"); if (!root) return; root.classList.remove("hidden");
+  const summary = paper.summary || {};
+  root.innerHTML = `<div class="paper-result-head"><div><p class="eyebrow">高考全卷复盘</p><h3>${escapeHtml(paper.title)}</h3><p>共 ${summary.total_questions || 0} 题 · 错题/待复核 ${summary.wrong_count || 0} · 母题命中 ${summary.mother_matched_count || 0} · 知识卡 ${summary.knowledge_card_count || 0}</p></div><div><button class="ghost-btn" data-export="docx">导出 Word</button><button class="primary-btn" data-export="pdf">导出 PDF</button></div></div><div class="paper-question-list">${(paper.questions || []).map(q => { const card=q.diagnosis?.gaokao_card; const mother=card?.mother_match; return `<article class="paper-question ${q.answer_state}"><div class="paper-question-head"><strong>第 ${escapeHtml(q.question_no)} 题</strong><span class="tag">${PAPER_STATE_LABELS[q.answer_state] || q.answer_state}</span></div><p>${escapeHtml(q.printed_text)}</p>${mother?`<div class="mother-match"><b>${escapeHtml(mother.code)} · ${escapeHtml(mother.name)}</b><span>${escapeHtml(mother.formula)}</span><small>${escapeHtml(mother.source)}</small></div>`:`<div class="mother-match review"><b>母题待教研复核</b><span>当前不会伪造真题来源，确认后再沉淀。</span></div>`}${q.student_work ? `<div class="paper-evidence"><b>学生笔迹/作答</b>${escapeHtml(q.student_work)}</div>`:""}${q.teacher_marks ? `<div class="paper-evidence"><b>教师批改</b>${escapeHtml(q.teacher_marks)}</div>`:""}${card?.steps?.length ? `<div class="eight-step-grid gaokao-card-grid">${card.steps.map(s=>`<section><span>${s.number}</span><strong>${escapeHtml(s.label)}</strong><p>${escapeHtml(typeof s.content==="string"?s.content:JSON.stringify(s.content))}</p></section>`).join("")}</div>`:(q.eight_steps?.length ? `<div class="eight-step-grid">${q.eight_steps.map(s=>`<section><span>${s.number}</span><strong>${escapeHtml(s.label)}</strong><p>${escapeHtml(s.content || "待复核")}</p></section>`).join("")}</div>`:"")}</article>`; }).join("")}</div>`;
+  root.querySelectorAll("[data-export]").forEach(btn => btn.addEventListener("click", () => downloadPaper(paper.id, btn.dataset.export)));
+  root.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+async function downloadPaper(id, format) {
+  const headers = {}; const token = getToken(); if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`/api/papers/${id}/export/${format}`, {headers});
+  if (!response.ok) throw new Error((await response.json()).error || "导出失败");
+  const blob = await response.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`全卷分析.${format}`; a.click(); URL.revokeObjectURL(url);
+}
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -462,11 +629,24 @@ function updateAccountCard() {
 }
 
 updateAccountCard = function updateAccountCardClean() {
+  updateAdminNav();
+  const workspaceText = $("#workspaceAccountText");
+  const workspaceButton = $("#workspaceLoginBtn");
+  if (workspaceText) workspaceText.textContent = state.user ? `${state.user.email || "已登录"}${state.user.is_admin ? " · 最高权限" : ""}` : "尚未登录";
+  if (workspaceButton) {
+    workspaceButton.textContent = state.user ? "退出登录" : "登录 / 注册";
+    workspaceButton.onclick = state.user ? (()=>{clearToken();state.user=null;updateAccountCard();toast("已退出登录。");}) : (()=>state.appConfig.use_unified_auth?goUnifiedLogin("login"):openModal("authModal"));
+  }
+  const sidebarName = $("#sidebarAccountName");
+  const sidebarState = $("#sidebarAccountState");
+  const sidebarButton = $("#sidebarLoginBtn");
+  if (sidebarName) sidebarName.textContent = state.user ? (state.user.email || "个人账号") : "个人账号";
+  if (sidebarState) sidebarState.textContent = state.user ? `${state.user.is_admin ? "最高权限" : "已登录"} · ${state.user.credits || 0}积分` : "尚未登录";
+  if (sidebarButton) sidebarButton.textContent = state.user ? "退出登录" : "登录 / 注册";
   const title = $("#accountTitle");
   const desc = $("#accountDesc");
   const actions = $("#accountActions");
   if (!title || !desc || !actions) return;
-  updateAdminNav();
   if (state.user) {
     const role = state.user.is_admin ? "管理员" : "学员";
     title.textContent = `${state.user.email} · ${role} · ${state.user.credits || 0} 积分`;
@@ -574,6 +754,38 @@ async function loadPortalTools() {
   state.portalTools = await api("/api/portal-tools");
   renderPortalTools();
   renderToolSelect();
+}
+
+async function loadInstitutions() {
+  const grid = $("#institutionGrid");
+  if (!grid) return;
+  try {
+    const data = await api("/api/org/institutions");
+    const list = data.institutions || [];
+    grid.innerHTML = list.length
+      ? list.slice(0, 8).map((inst) => `
+        <article class="institution-card">
+          <strong>${escapeHtml(inst.name || "教培机构")}</strong>
+          <span>${escapeHtml(inst.city || "全国")} · ${Number(inst.member_count || 0)} 名机构成员 · ${Number(inst.class_count || 0)} 个班级</span>
+          <p>${escapeHtml(inst.intro || "已接入 AI 错题拆博士机构管理系统，可管理学生、老师、教务与机构标识。")}</p>
+          <div class="institution-card-actions">
+            <a class="ghost-btn" href="/org">机构站点</a>
+            <a class="primary-btn" href="/org-admin">机构管理</a>
+          </div>
+        </article>
+      `).join("")
+      : `<article class="institution-card">
+          <strong>欢迎学校 / 教培机构入驻</strong>
+          <span>任何人可注册机构</span>
+          <p>机构可添加学生、老师、教务，成员保留普通用户能力，同时多一个机构标识。</p>
+          <div class="institution-card-actions">
+            <a class="primary-btn" href="/org-admin">立即注册机构</a>
+            <a class="ghost-btn" href="/org">查看机构站点</a>
+          </div>
+        </article>`;
+  } catch (err) {
+    grid.innerHTML = `<div class="empty-state compact-empty"><p>${escapeHtml(err.message)}</p></div>`;
+  }
 }
 
 function deliveryLabel(delivery) {
@@ -1371,13 +1583,16 @@ function renderDiagnosis(item) {
 
   $("#emptyState").classList.add("hidden");
   $("#diagnosisResult").classList.remove("hidden");
-  $("#resultStatus").textContent = item.status === "review_needed" ? "需复核" : item.status === "passed" ? "已过关" : "已拆解";
+  $("#resultStatus").textContent = statusText(item.status);
   $("#resultStatus").className = item.status === "review_needed" ? "tag warn" : item.status === "passed" ? "tag success" : "tag success";
 
   $("#guestSaveBanner")?.classList.toggle("hidden", Boolean(state.user));
 
   $("#corePattern").textContent = diagnosis.core_pattern || "待归纳题型";
-  $("#confidenceText").textContent = `置信度 ${Math.round((item.confidence || diagnosis.confidence || 0.75) * 100)}% · ${diagnosis.topic || diagnosis.subject || "自动识别"}`;
+  const workflowMeta = item.mastery_score > 0
+    ? ` · 掌握度 ${item.mastery_score}%${item.next_review_at ? ` · 下次复习 ${String(item.next_review_at).slice(0, 10)}` : ""}`
+    : "";
+  $("#confidenceText").textContent = `置信度 ${Math.round((item.confidence || diagnosis.confidence || 0.75) * 100)}% · ${diagnosis.topic || diagnosis.subject || "自动识别"}${workflowMeta}`;
   $("#finalAnswer").textContent = standardAnswer.final_answer || "模型未返回最终答案，请查看下方拆解步骤。";
   $("#conciseSolution").textContent = standardAnswer.concise_solution || "暂无简洁解析。";
 
@@ -1536,7 +1751,7 @@ function renderVariants(variants) {
     card.className = "variant-card";
     card.innerHTML = `
       <div>
-        <span class="tag">第 ${variant.level} 题</span>
+        <span class="tag">${["同型巩固", "轻微变式", "综合迁移"][variant.level - 1] || `第 ${variant.level} 题`}</span>
         <h3>${escapeHtml(variant.title || "巩固题")}</h3>
       </div>
       <p class="variant-stem">${escapeHtml(variant.stem)}</p>
@@ -1716,6 +1931,9 @@ function statusText(status) {
     diagnosed: "已拆解",
     review_needed: "需复核",
     training: "训练中",
+    remediation: "回炉巩固",
+    review_scheduled: "待间隔复习",
+    mastered: "已掌握",
     passed: "已过关",
   }[status] || status;
 }
@@ -1992,15 +2210,17 @@ async function renderTodayPanel() {
   const listRoot = $("#todayList");
   if (!summary || !listRoot) return;
   const list = await fetchWrongQuestions();
-  const pendingTraining = list.filter((item) => ["diagnosed", "training"].includes(item.status));
+  const now = Date.now();
+  const dueReview = list.filter((item) => item.workflow_state === "review_scheduled" && item.next_review_at && Date.parse(item.next_review_at) <= now);
+  const pendingTraining = list.filter((item) => ["diagnosed", "training", "remediation"].includes(item.status));
   const reviewNeeded = list.filter((item) => item.status === "review_needed");
   const passedRecent = list.filter((item) => item.status === "passed").slice(0, 3);
   summary.innerHTML = `
     <div class="today-card"><span>待训练</span><strong>${pendingTraining.length}</strong></div>
     <div class="today-card warn"><span>需复核</span><strong>${reviewNeeded.length}</strong></div>
-    <div class="today-card success"><span>已过关</span><strong>${list.filter((item) => item.status === "passed").length}</strong></div>
+    <div class="today-card success"><span>今日复习</span><strong>${dueReview.length}</strong></div>
   `;
-  const focus = [...reviewNeeded, ...pendingTraining].slice(0, 5);
+  const focus = [...reviewNeeded, ...dueReview, ...pendingTraining].slice(0, 5);
   listRoot.innerHTML = "";
   if (!focus.length) {
     listRoot.innerHTML = `<div class="empty-state compact-empty"><p>暂无待办错题。上传一道错题开始今日训练。</p><button class="primary-btn" type="button" id="todayStartBtn">开始错题拆解</button></div>`;
@@ -2046,7 +2266,7 @@ async function loadMothers() {
   const mothers = await api("/api/mother-questions");
   $("#motherList").innerHTML = "";
   if (!mothers.length) {
-    $("#motherList").innerHTML = `<article class="mother-card"><h3>接口已预留</h3><p>后续可把每次 AI 输出的母题雏形沉淀到这里。</p></article>`;
+    $("#motherList").innerHTML = `<article class="mother-card"><h3>母题库等待初始化</h3><p>请联系管理员完成教研数据初始化。</p></article>`;
     return;
   }
   mothers.forEach((mother) => {
@@ -2055,7 +2275,9 @@ async function loadMothers() {
     card.innerHTML = `
       <span class="tag">${escapeHtml(mother.code)} · ${escapeHtml(mother.status)}</span>
       <h3>${escapeHtml(mother.name)}</h3>
-      <p>${escapeHtml(JSON.stringify(mother.metadata || {}, null, 2))}</p>
+      <p><b>解题公式：</b>${escapeHtml(mother.metadata?.formula || "待教研完善")}</p>
+      <p><b>关键提醒：</b>${escapeHtml((mother.metadata?.reminders || []).join("；") || "待教研完善")}</p>
+      <small>${escapeHtml(mother.metadata?.source || "来源待核验")}</small>
     `;
     $("#motherList").appendChild(card);
   });
@@ -2444,6 +2666,8 @@ function bindEvents() {
   });
 
   $("#ocrBtn").addEventListener("click", runOcr);
+  $("#analyzePaperBtn")?.addEventListener("click", createPaperAnalysis);
+  $("#refreshPapersBtn")?.addEventListener("click", () => loadPapers().catch((err) => toast(err.message)));
   $("#diagnoseBtn").addEventListener("click", diagnose);
   $("#generateStudyCardBtn").addEventListener("click", generateStudyCard);
   updateDiagnoseProgress("input");
@@ -2534,7 +2758,9 @@ function bindEvents() {
   });
 }
 
+prepareChineseWorkbench();
 bindEvents();
+bindDashboard();
 setInputMode("image");
 setAuthMode("login");
 bindAllFileIngests();
@@ -2543,6 +2769,8 @@ applyStudentMode();
 captureUnifiedTokenFromUrl();
 loadAppConfig().then(loadUser).catch((err) => toast(err.message));
 loadPortalTools().catch((err) => toast(err.message));
+loadInstitutions().catch((err) => toast(err.message));
 loadAgentLayers().catch((err) => toast(err.message));
 loadModels().catch((err) => toast(err.message));
 loadImageModels().catch((err) => toast(err.message));
+loadPapers().catch(() => {});

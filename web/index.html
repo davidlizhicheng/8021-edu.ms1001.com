@@ -1,12 +1,15 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-ms1001-chrome="on" data-ms1001-chrome-layout="sidebar">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI错题拆博士®---AI中高考错题难题拆解提分博士</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=20260701auth1" />
+    <script>localStorage.setItem('ms1001-lang','zh');localStorage.setItem('ms1001-account-lang','zh');document.documentElement.lang='zh-CN';</script>
+    <link rel="stylesheet" href="/styles.css?v=20260712account2" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+      <script src="https://ai.ms1001.com/shared/ms1001-theme-boot.js?v=20260709brandmatch"></script>
+      <link rel="stylesheet" href="https://ai.ms1001.com/shared/ms1001-chrome.css?v=20260709brandmatch" data-ms1001-chrome-css="1" />
   </head>
   <body>
     <div class="shell">
@@ -65,6 +68,11 @@
           </button>
         </nav>
 
+        <div class="institution-entry">
+          <a href="/org" class="primary-btn">机构站点</a>
+          <a href="/org-admin" class="ghost-btn">机构管理</a>
+        </div>
+
         <div class="side-note">
           <span>产品说明</span>
           <strong>全科错题拆解 · 真 OCR · 多模型</strong>
@@ -99,6 +107,41 @@
         </header>
 
         <section id="view-portal" class="view active">
+          <section class="dual-dashboard" id="dualDashboard">
+            <div class="dashboard-welcome">
+              <div>
+                <span class="dashboard-kicker" id="dashboardKicker">今天从哪一步开始？</span>
+                <h2 id="dashboardTitle">把不会的题，真正练到会</h2>
+                <p id="dashboardLead">上传整张试卷或一道错题，系统会识别笔迹、定位错因，用八步法讲清楚，再安排巩固与复习。</p>
+              </div>
+              <div class="mode-switch" role="group" aria-label="工作台模式">
+                <button type="button" class="is-active" data-work-mode="student">学生模式</button>
+                <button type="button" data-work-mode="teacher">教师模式</button>
+              </div>
+            </div>
+            <div class="dashboard-actions" id="studentDashboardActions">
+              <button class="dashboard-action action-primary" type="button" data-dashboard-action="paper"><span>01</span><strong>上传整张试卷</strong><small>逐题识别笔迹、批改和错题</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="single"><span>02</span><strong>拍一道错题</strong><small>立即进入八步法拆解</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="today"><span>03</span><strong>今日复习</strong><small>完成到期任务和回炉训练</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="library"><span>04</span><strong>我的错题本</strong><small>查看掌握度与训练进度</small></button>
+            </div>
+            <div class="dashboard-actions hidden" id="teacherDashboardActions">
+              <button class="dashboard-action action-primary" type="button" data-dashboard-action="paper"><span>01</span><strong>新建全卷分析</strong><small>批量识别试卷与学生作答</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="review"><span>02</span><strong>待复核题目</strong><small>处理低置信度与批改争议</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="report"><span>03</span><strong>查看学情报告</strong><small>知识点失分与错因分布</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="profile"><span>04</span><strong>导出教学档案</strong><small>生成 Word 或 PDF 报告</small></button>
+            </div>
+            <div class="dashboard-overview">
+              <section><span>待复习</span><strong id="dashDueCount">0</strong><small>按计划完成即可</small></section>
+              <section><span>待复核</span><strong id="dashReviewCount">0</strong><small>需要确认识别结果</small></section>
+              <section><span>已掌握</span><strong id="dashMasteredCount">0</strong><small>继续保持复习节奏</small></section>
+              <section><span>最近试卷</span><strong id="dashPaperCount">0</strong><small>可随时查看和导出</small></section>
+            </div>
+            <div class="dashboard-recent">
+              <div class="dashboard-section-head"><div><span>最近学习</span><h3 id="dashboardRecentTitle">继续上次的任务</h3></div><button id="dashboardRefreshBtn" class="ghost-btn" type="button">刷新</button></div>
+              <div id="dashboardRecentList" class="dashboard-recent-list"></div>
+            </div>
+          </section>
           <section class="panel portal-spotlight">
             <div class="portal-spotlight-inner">
               <p class="eyebrow">核心能力 · 错题突破</p>
@@ -148,6 +191,21 @@
                 <small>分科归档、回看拆解、导出个人学习档案</small>
               </button>
             </div>
+          </section>
+
+          <section class="panel institution-panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Institution</p>
+                <h2>教培机构与班级管理</h2>
+                <p class="section-subtitle">学校、工作室、教培机构可注册机构，添加旗下学生/老师/教务。成员保留普通用户能力，同时带机构标识，便于后续按机构汇总错题与学习状态。</p>
+              </div>
+              <div class="portal-actions">
+                <a class="primary-btn" href="/org-admin">注册 / 管理机构</a>
+                <a class="ghost-btn" href="/org">查看机构站点</a>
+              </div>
+            </div>
+            <div id="institutionGrid" class="institution-grid"></div>
           </section>
 
           <section class="panel today-panel" id="todayPanel">
@@ -428,6 +486,35 @@
                 <p class="section-subtitle">上传错题 → OCR 校准 → 超细拆题 → 巩固训练 → 自动写入我的错题本。</p>
               </div>
             </div>
+          </section>
+          <section class="panel paper-workbench" id="paperWorkbench">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Full Paper Analysis</p>
+                <h2>全卷分析 · 自动提取每一道错题</h2>
+                <p class="section-subtitle">上传试卷图片或粘贴整卷文本，识别印刷内容、学生笔迹和教师批改，逐题判定并对错题执行固定八步法。</p>
+              </div>
+              <button id="refreshPapersBtn" class="ghost-btn" type="button">刷新历史</button>
+            </div>
+            <div class="paper-upload-grid">
+              <label class="file-dropzone" for="paperFilesInput">
+                <input id="paperFilesInput" type="file" multiple accept="image/*,.txt,.md" />
+                <strong>上传整张试卷</strong>
+                <small>支持多页图片、TXT；图片会识别手写作答、红叉、得分与批注</small>
+              </label>
+              <div id="paperSelectedFiles" class="paper-selected-files"><span>尚未选择文件</span></div>
+              <div class="paper-fields">
+                <input id="paperTitleInput" class="text-input" placeholder="试卷名称，例如：高三数学月考" />
+                <select id="paperSubjectSelect" class="text-input">
+                  <option value="自动识别">自动识别学科</option><option>高中数学</option><option>高中语文</option><option>高中英语</option><option>高中物理</option><option>高中化学</option><option>高中生物</option><option>高中政治</option><option>高中历史</option><option>高中地理</option>
+                </select>
+                <textarea id="paperTextInput" rows="5" placeholder="也可直接粘贴整卷文本；系统将按题号切分。"></textarea>
+                <button id="analyzePaperBtn" class="primary-btn" type="button">开始全卷分析</button>
+              </div>
+            </div>
+            <div id="paperJobStatus" class="paper-job-status hidden"></div>
+            <div id="paperHistoryList" class="paper-history-list"></div>
+            <div id="paperResult" class="paper-result hidden"></div>
           </section>
           <div class="diagnose-progress" id="diagnoseProgress">
             <span class="progress-step active" data-step="input">1 输入错题</span>
@@ -797,13 +884,13 @@
           <section class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Reserved API</p>
-                <h2>母题预留接口</h2>
+                <p class="eyebrow">高考题型模型</p>
+                <h2>高考母题中心</h2>
               </div>
             </div>
             <div class="reserved-intro">
-              <strong>当前不做正式母题库。</strong>
-              <p>每次错题拆解会自动沉淀「题型原型」到母题库，供后续复习与拓展。</p>
+              <strong>先识别题型，再调用解题公式。</strong>
+              <p>每道错题会匹配母题编号、解题公式和关键提醒；真题内容必须带可核验来源，未命中项目进入教研复核。</p>
             </div>
             <div id="motherList" class="mother-list"></div>
           </section>
@@ -1063,6 +1150,7 @@
     <div id="toast" class="toast hidden"></div>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-    <script defer src="/app.js?v=20260701auth1"></script>
+    <script defer src="/app.js?v=20260712account2"></script>
+      <script src="https://ai.ms1001.com/shared/ms1001-site-boot.js?v=20260709brandmatch" defer></script>
   </body>
 </html>
