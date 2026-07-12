@@ -1,6 +1,6 @@
 import unittest
 
-from gaokao_core import build_gaokao_card, match_mother_question
+from gaokao_core import build_gaokao_card, build_memory_poem, match_mother_question
 
 
 class GaokaoCoreTests(unittest.TestCase):
@@ -19,7 +19,14 @@ class GaokaoCoreTests(unittest.TestCase):
         card = build_gaokao_card({}, {}, match_mother_question("无法判断题型的短文本", ""))
         self.assertEqual(card["evidence_status"], "review_required")
 
+    def test_memory_poem_encodes_formula_and_mother(self):
+        mother = match_mother_question("讨论导数与单调区间并求极值", "数学")
+        poem = build_memory_poem(mother, {})
+        self.assertEqual(len(poem["lines"]), 6)
+        self.assertEqual(len(poem["line_reviews"]), 6)
+        self.assertIn("求定义域", poem["formula_path"])
+        self.assertEqual(poem["mother_code"], "M-MATH-DERIV-01")
+
 
 if __name__ == "__main__":
     unittest.main()
-

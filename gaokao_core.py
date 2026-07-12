@@ -52,6 +52,35 @@ def match_mother_question(question: str, subject: str = "", catalog: Iterable[di
     return {**best, "match_score": best_score, "match_basis": [kw for kw in best.get("keywords", []) if kw.lower() in haystack]}
 
 
+def build_memory_poem(mother: dict | None, diagnosis: dict | None = None) -> dict:
+    """生成可复述、可解码的题后记忆诗，不以押韵牺牲解题准确性。"""
+    mother, diagnosis = mother or {}, diagnosis or {}
+    name = mother.get("name") or diagnosis.get("core_pattern") or "本题模型"
+    signals = "、".join((mother.get("match_basis") or mother.get("keywords") or [])[:3]) or "题干信号"
+    formula = mother.get("formula") or (diagnosis.get("decomposition") or {}).get("total_formula") or "读题→取条件→建模→求解→校验"
+    reminders = "；".join((mother.get("reminders") or [])[:2]) or "条件、步骤、结论都要检查"
+    lines = [
+        f"题里看见{signals}，先把{str(name)[:10]}想；",
+        "设问倒推缺什么，已知条件排成行；",
+        f"路径记作：{formula}；",
+        "一步一据写清楚，评分要点莫隐藏；",
+        f"回头细查：{reminders}；",
+        "换题若逢同信号，照着模型再开场。",
+    ]
+    meanings = [
+        "辨识信号并调用母题", "从设问反推条件", "记忆非数学公式的解题流程",
+        "规范表达并对应评分点", "检查本题高频错误", "完成同类题迁移",
+    ]
+    return {
+        "title": f"《{name}记忆诗》",
+        "lines": lines,
+        "line_reviews": [{"line": line, "model_hint": hint} for line, hint in zip(lines, meanings)],
+        "formula_path": formula,
+        "mother_code": mother.get("code"),
+        "purpose": "通俗记忆；诗句不能替代规范解答与正式评分标准",
+    }
+
+
 def build_gaokao_card(question: dict, diagnosis: dict, mother: dict | None = None) -> dict:
     analysis = diagnosis.get("student_answer_analysis") or {}
     strategy = diagnosis.get("learning_strategy") or {}
@@ -75,5 +104,5 @@ def build_gaokao_card(question: dict, diagnosis: dict, mother: dict | None = Non
         "mother_match": mother or None,
         "steps": [{"number": i, "key": key, "label": label, "content": contents[key]} for i, (key, label) in enumerate(GAOKAO_CARD_STEPS, 1)],
         "evidence_status": "matched" if mother else "review_required",
+        "memory_poem": build_memory_poem(mother, diagnosis),
     }
-

@@ -3436,6 +3436,7 @@ def enrich_gaokao_diagnosis(question: dict, diagnosis: dict, subject: str) -> di
     mother = match_mother_question(question.get("printed_text") or "", subject)
     enriched = dict(diagnosis or {})
     enriched["gaokao_card"] = build_gaokao_card(question, enriched, mother)
+    enriched["poem"] = enriched["gaokao_card"]["memory_poem"]
     enriched["mother_question"] = mother
     standard = enriched.setdefault("standard_answer", {})
     if not standard.get("concise_solution"):
@@ -3616,6 +3617,12 @@ def build_paper_docx(paper: dict) -> bytes:
         for step in q.get("eight_steps") or []:
             doc.add_heading(f"{step.get('number')}. {step.get('label')}", level=2)
             doc.add_paragraph(step.get("content") or "待复核")
+        poem = (q.get("diagnosis") or {}).get("poem") or {}
+        if poem.get("lines"):
+            doc.add_heading(poem.get("title") or "题后记忆诗", level=2)
+            for line in poem.get("lines") or []:
+                doc.add_paragraph(line)
+            doc.add_paragraph("模型解码：" + "；".join(x.get("model_hint") or x.get("review") or "" for x in poem.get("line_reviews") or []))
     stream = BytesIO(); doc.save(stream); return stream.getvalue()
 
 
@@ -3635,6 +3642,11 @@ def build_paper_pdf(paper: dict) -> bytes:
         story += [Spacer(1, 12), Paragraph(f"第 {q.get('question_no')} 题｜{q.get('answer_state')}", styles['Heading2']), Paragraph((q.get("printed_text") or "").replace('\n','<br/>'), styles['BodyText'])]
         for step in q.get("eight_steps") or []:
             story.append(Paragraph(f"{step.get('number')}. {step.get('label')}：{step.get('content') or '待复核'}", styles['BodyText']))
+        poem = (q.get("diagnosis") or {}).get("poem") or {}
+        if poem.get("lines"):
+            story.append(Paragraph(poem.get("title") or "题后记忆诗", styles['Heading2']))
+            for line in poem.get("lines") or []:
+                story.append(Paragraph(line, styles['BodyText']))
     SimpleDocTemplate(stream, pagesize=A4).build(story); return stream.getvalue()
 
 
