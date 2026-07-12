@@ -54,18 +54,13 @@ function prepareChineseWorkbench() {
     <button class="nav-item active" data-view="portal"><span class="nav-icon">首</span><span data-nav-label>学习首页</span></button>
     <button class="nav-item nav-core" data-view="diagnose"><span class="nav-icon">析</span><span data-nav-label>试卷与错题分析</span></button>
     <button class="nav-item" data-view="library"><span class="nav-icon">本</span><span data-nav-label>我的错题本</span></button>
-    <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>分析历史</span></button>
     <button class="nav-item" data-view="report"><span class="nav-icon">报</span><span data-nav-label>学习报告</span></button>
-    <button class="nav-item" data-view="profile"><span class="nav-icon">档</span><span data-nav-label>档案与导出</span></button>
+    <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>历史记录</span></button>
     <button class="nav-item" data-view="tool"><span class="nav-icon">工</span><span data-nav-label>20个工作台</span></button>
     <button class="nav-item hidden" id="adminNavItem" data-view="admin"><span class="nav-icon">管</span><span>后台管理</span></button>`;
   if (nav) nav.insertAdjacentHTML("afterend", `<section class="sidebar-account" aria-label="个人账号">
     <div class="sidebar-account-head"><span class="sidebar-avatar">我</span><div><strong id="sidebarAccountName">个人账号</strong><small id="sidebarAccountState">尚未登录</small></div></div>
     <button id="sidebarLoginBtn" class="sidebar-action primary" type="button">登录 / 注册</button>
-    <div class="sidebar-quick-actions">
-      <button id="sidebarTrialBtn" type="button">免费体验</button><button id="sidebarRedeemBtn" type="button">积分兑换</button>
-      <button id="sidebarContactBtn" type="button">联系我们</button><button id="sidebarTermsBtn" type="button">服务与隐私</button>
-    </div>
   </section>`);
   const topTitle = $(".topbar h1"); if (topTitle) topTitle.textContent = "错题学习工作台";
   const topEyebrow = $(".topbar .eyebrow"); if (topEyebrow) topEyebrow.textContent = "学生 · 教师共用";
@@ -93,8 +88,8 @@ function applyWorkMode(mode) {
   if ($("#dashboardTitle")) $("#dashboardTitle").textContent = teacher ? "从一张试卷，看清每个学生的问题" : "把不会的题，真正练到会";
   if ($("#dashboardLead")) $("#dashboardLead").textContent = teacher ? "批量分析试卷、复核识别结果、查看知识点失分，并导出可交付的教学报告。" : "上传整张试卷或一道错题，识别笔迹、定位错因、八步讲解，再进入巩固和复习。";
   const labels = teacher
-    ? ["教学首页","试卷与错题分析","学生错题库","分析历史","学情报告","档案与导出","20个工作台"]
-    : ["学习首页","试卷与错题分析","我的错题本","分析历史","学习报告","档案与导出","20个工作台"];
+    ? ["教学首页","试卷与错题分析","学生错题库","学情报告","历史记录","20个工作台"]
+    : ["学习首页","试卷与错题分析","我的错题本","学习报告","历史记录","20个工作台"];
   $$(".nav-item [data-nav-label]").forEach((node,index) => { if (labels[index]) node.textContent=labels[index]; });
   loadDashboard().catch(() => {});
 }
@@ -121,10 +116,6 @@ function bindDashboard() {
   $("#paperFilesInput")?.addEventListener("change", updatePaperSelection);
   $("#workspaceLoginBtn")?.addEventListener("click",()=>state.appConfig.use_unified_auth?goUnifiedLogin("login"):openModal("authModal"));
   $("#sidebarLoginBtn")?.addEventListener("click",()=>state.user?logoutPersonalAccount():openModal("authModal"));
-  $("#sidebarTrialBtn")?.addEventListener("click",()=>switchView("tool"));
-  $("#sidebarRedeemBtn")?.addEventListener("click",()=>openModal("redeemModal"));
-  $("#sidebarContactBtn")?.addEventListener("click",()=>openModal("contactModal"));
-  $("#sidebarTermsBtn")?.addEventListener("click",()=>showTerms("service"));
   $$('[data-dashboard-action]').forEach(btn=>btn.addEventListener("click",()=>{
     const action=btn.dataset.dashboardAction;
     if (["paper","single","review"].includes(action)) { switchView("diagnose"); setTimeout(()=>$(action==="single"?".upload-panel":"#paperWorkbench")?.scrollIntoView({behavior:"smooth"}),50); }

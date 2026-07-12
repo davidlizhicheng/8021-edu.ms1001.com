@@ -3361,6 +3361,26 @@ def run_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
     return result
 
 
+def ocr_quality_score(result: dict) -> float:
+    questions = result.get("questions") or []
+    confidence = float(result.get("page_confidence") or 0)
+    usable = sum(1 for q in questions if len(str(q.get("printed_text") or "").strip()) >= 6)
+    return confidence * 0.65 + min(1.0, usable / max(1, len(questions))) * 0.2 + min(1.0, usable / 8) * 0.15
+
+
+def best_of_two_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
+    """低置信度时复识别，并按置信度、有效题干数选择更完整结果。"""
+    first = run_paper_ocr(image_data_url, model_id)
+    if float(first.get("page_confidence") or 0) >= 0.82 and len(first.get("questions") or []) >= 1:
+        first["recognition_attempts"] = 1
+        return first
+    second = run_paper_ocr(image_data_url, model_id)
+    chosen = max((first, second), key=ocr_quality_score)
+    chosen["recognition_attempts"] = 2
+    chosen["quality_score"] = round(ocr_quality_score(chosen), 3)
+    return chosen
+
+
 def image_url_to_data_url(source_url: str) -> str:
     relative = str(source_url or "").split("?", 1)[0].lstrip("/")
     path = PUBLIC_DIR / relative
@@ -3417,6 +3437,19 @@ def enrich_gaokao_diagnosis(question: dict, diagnosis: dict, subject: str) -> di
     enriched = dict(diagnosis or {})
     enriched["gaokao_card"] = build_gaokao_card(question, enriched, mother)
     enriched["mother_question"] = mother
+    standard = enriched.setdefault("standard_answer", {})
+    if not standard.get("concise_solution"):
+        standard["concise_solution"] = "待教师复核后补充规范分步解答"
+        enriched["needs_review"] = True
+    if not standard.get("scoring_points") and not enriched.get("scoring_points"):
+        standard["scoring_points"] = ["识别条件与设问", "写出关键公式或依据", "完成推导并给出结论"]
+        enriched["quality_warning"] = "评分点为结构化建议，需结合正式评分标准复核"
+    enriched["quality_gate"] = {
+        "has_answer_trace": bool((enriched.get("student_answer_analysis") or {}).get("extracted_work") or question.get("student_work")),
+        "has_standard_solution": bool(standard.get("concise_solution")),
+        "has_scoring_points": bool(standard.get("scoring_points") or enriched.get("scoring_points")),
+        "has_mother_evidence": bool(mother),
+    }
     return enriched
 
 
@@ -3509,7 +3542,7 @@ def process_paper_job(paper_id: str, model_id: str | None = None) -> None:
         extracted = []
         for index, page in enumerate(pages, start=1):
             if page["source_url"]:
-                result = run_paper_ocr(image_url_to_data_url(page["source_url"]), model_id)
+                result = best_of_two_paper_ocr(image_url_to_data_url(page["source_url"]), model_id)
                 questions = result.get("questions") or []
             else:
                 result = {"page_text": page["source_text"] or "", "page_confidence": 0.82}
