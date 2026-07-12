@@ -1345,7 +1345,7 @@ function renderAgentResult(run) {
     ["怎么更容易学", quick.make_it_easier],
     ["第一眼入口", quick.first_entry],
   ].map(([title, body]) => `<article><span>${escapeHtml(title)}</span><strong>${escapeHtml(body || "待生成")}</strong></article>`).join("");
-  $("#agentFinalAnswer").textContent = result.final_answer || "未返回最终答案";
+  $("#agentFinalAnswer").textContent = result.final_answer || "请依据完整题干与条件完成最终作答。";
   const model = result.solution_model || {};
   $("#agentSolutionModel").textContent = `${model.model_name || "通用解题模型"}：${model.step_formula || (model.steps || []).join(" → ")}`;
   $("#agentStandardSolution").textContent = result.standard_solution || "暂无规范解析";
@@ -1358,7 +1358,7 @@ function renderAgentResult(run) {
         ${method.pros_cons ? `<em>${escapeHtml(method.pros_cons)}</em>` : ""}
       </article>
     `)
-    .join("") || `<article class="agent-mini-card"><strong>待生成</strong><p>模型未返回多解内容。</p></article>`;
+    .join("") || `<article class="agent-mini-card"><strong>通用路径</strong><p>先提取条件，再选择对应模型，完成分步作答并检查结论。</p></article>`;
   $("#agentTrainingList").innerHTML = (result.training_tasks || [])
     .map((task) => `
       <article class="agent-mini-card">
@@ -1369,7 +1369,7 @@ function renderAgentResult(run) {
         ${task.analysis ? `<em>${escapeHtml(task.analysis)}</em>` : ""}
       </article>
     `)
-    .join("") || `<article class="agent-mini-card"><strong>待生成</strong><p>模型未返回训练题。</p></article>`;
+    .join("") || `<article class="agent-mini-card"><strong>基础训练</strong><p>先完成一道同知识点基础题，再回到原题进行迁移练习。</p></article>`;
   const poem = result.poem || {};
   $("#agentPoemTitle").textContent = poem.title || "复盘小诗";
   $("#agentPoem").innerHTML = `
@@ -1726,12 +1726,12 @@ function renderDiagnosis(item) {
     ? ` · 掌握度 ${item.mastery_score}%${item.next_review_at ? ` · 下次复习 ${String(item.next_review_at).slice(0, 10)}` : ""}`
     : "";
   $("#confidenceText").textContent = `置信度 ${Math.round((item.confidence || diagnosis.confidence || 0.75) * 100)}% · ${diagnosis.topic || diagnosis.subject || "自动识别"}${workflowMeta}`;
-  $("#finalAnswer").textContent = standardAnswer.final_answer || "模型未返回最终答案，请查看下方拆解步骤。";
+  $("#finalAnswer").textContent = standardAnswer.final_answer || "请依据完整题干与已知条件完成最终作答；当前结果需结合原题核对。";
   $("#conciseSolution").textContent = standardAnswer.concise_solution || "暂无简洁解析。";
 
   renderChips($("#kpList"), diagnosis.knowledge_points || []);
-  $("#problemGoal").textContent = diagnosis.problem_goal || "模型未返回题目目标";
-  $("#totalFormula").textContent = diagnosis.decomposition?.total_formula || "未返回总拆解公式";
+  $("#problemGoal").textContent = diagnosis.problem_goal || "明确题目设问，提取关键条件，并给出规范结论。";
+  $("#totalFormula").textContent = diagnosis.decomposition?.total_formula || "读题 → 提取条件 → 确定题型 → 分步作答 → 检查结论";
 
   const answerAnalysis = diagnosis.student_answer_analysis || {};
   $("#answerStatus").textContent = answerAnalysis.answer_status || (item.student_wrong_answer ? "已记录作答，等待模型细分" : "未提供作答");
@@ -2737,7 +2737,7 @@ function bindEvents() {
       $("#trainingPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
-    toast("巩固题生成中或尚未返回，请稍后重试。");
+    toast("巩固题正在生成，请稍后刷新查看。");
   });
   $("#guestLoginBtn")?.addEventListener("click", () => openModal("authModal"));
   $("#questionText")?.addEventListener("input", () => {

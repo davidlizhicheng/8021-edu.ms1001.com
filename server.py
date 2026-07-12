@@ -697,6 +697,142 @@ def current_user_from_request(conn: sqlite3.Connection, headers) -> dict | None:
     return current_user_from_token(conn, token)
 
 
+_MOJIBAKE_RE = re.compile(r"(?:Ã.|Â.|â.|ã€|ï¼|å[^\u4e00-\u9fff]|æ[^\u4e00-\u9fff]|ç[^\u4e00-\u9fff]|è[^\u4e00-\u9fff]|ä[^\u4e00-\u9fff]|é[^\u4e00-\u9fff]|�)")
+
+
+def _mojibake_score(text: str) -> int:
+    return len(_MOJIBAKE_RE.findall(text or ""))
+
+
+def repair_mojibake_text(value: object) -> str:
+    text = str(value or "")
+    if not text or _mojibake_score(text) == 0:
+        return text
+    current = text
+    for _ in range(2):
+        candidates = []
+        try:
+            mixed = bytearray()
+            for char in current:
+                if ord(char) <= 255:
+                    mixed.append(ord(char))
+                else:
+                    mixed.extend(char.encode("cp1252"))
+            candidates.append(bytes(mixed).decode("utf-8"))
+        except (UnicodeEncodeError, UnicodeDecodeError, ValueError):
+            pass
+        for encoding in ("cp1252", "latin1"):
+            try:
+                candidates.append(current.encode(encoding).decode("utf-8"))
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+        if not candidates:
+            break
+        candidate = min(candidates, key=lambda item: (_mojibake_score(item), -len(re.findall(r"[\u4e00-\u9fff]", item))))
+        if _mojibake_score(candidate) >= _mojibake_score(current):
+            break
+        current = candidate
+    return current
+
+
+def repair_text_tree(value: object) -> object:
+    if isinstance(value, str):
+        return repair_mojibake_text(value)
+    if isinstance(value, list):
+        return [repair_text_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(repair_text_tree(item) for item in value)
+    if isinstance(value, dict):
+        return {key: repair_text_tree(item) for key, item in value.items()}
+    return value
+
+
+def _replace_unhelpful_placeholder(text: str) -> str:
+    if "未返回" not in text:
+        return text
+    if "总拆解公式" in text or "公式" in text:
+        return "读题 → 提取条件 → 确定题型 → 分步作答 → 检查结论"
+    if "最终答案" in text or "答案" in text:
+        return "请依据完整题干与已知条件完成最终作答；当前结果需结合原题核对。"
+    if "题目目标" in text or "目标" in text:
+        return "明确题目设问，提取关键条件，并给出规范结论。"
+    return "当前信息不足，请补充完整题干或作答过程后继续分析。"
+
+
+def _replace_placeholder_tree(value: object) -> object:
+    if isinstance(value, str):
+        return _replace_unhelpful_placeholder(value)
+    if isinstance(value, list):
+        return [_replace_placeholder_tree(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_placeholder_tree(item) for key, item in value.items()}
+    return value
+
+
+def normalize_diagnosis_payload(payload: object, question_text: str = "", student_answer: str = "") -> dict:
+    result = repair_text_tree(payload if isinstance(payload, dict) else {})
+    result = dict(result)
+    result["core_pattern"] = str(result.get("core_pattern") or result.get("topic") or "待归纳题型")
+    result["subject"] = str(result.get("subject") or "自动识别")
+    result["problem_goal"] = str(result.get("problem_goal") or "明确题目设问，提取关键条件，并给出规范结论。")
+    points = result.get("knowledge_points")
+    result["knowledge_points"] = points if isinstance(points, list) and points else ["题干信息提取与规范作答"]
+
+    decomposition = result.get("decomposition") if isinstance(result.get("decomposition"), dict) else {}
+    decomposition["total_formula"] = str(decomposition.get("total_formula") or "读题 → 提取条件 → 确定题型 → 分步作答 → 检查结论")
+    steps = decomposition.get("step_formulas") if isinstance(decomposition.get("step_formulas"), list) else []
+    if not steps:
+        steps = [
+            {"name": "读题定位", "formula": "题型 + 已知条件 + 设问", "operation": "圈出关键词，明确最终要回答什么"},
+            {"name": "选择方法", "formula": "知识点 → 解题模型", "operation": "根据触发特征选择公式、依据或答题模板"},
+            {"name": "规范作答", "formula": "依据 → 步骤 → 结论", "operation": "逐步写清推理、计算与评分点"},
+            {"name": "检查迁移", "formula": "条件 + 单位 + 边界 + 结论", "operation": "核对结果，并总结同类题的识别入口"},
+        ]
+    decomposition["step_formulas"] = steps
+    result["decomposition"] = decomposition
+
+    standard = result.get("standard_answer") if isinstance(result.get("standard_answer"), dict) else {}
+    standard["final_answer"] = str(standard.get("final_answer") or "请依据完整题干与已知条件完成最终作答；当前结果需结合原题核对。")
+    standard["concise_solution"] = str(standard.get("concise_solution") or "先提取已知条件和设问，再选择对应知识点与方法，分步完成并检查结论。")
+    scoring = standard.get("scoring_points") if isinstance(standard.get("scoring_points"), list) else []
+    standard["scoring_points"] = scoring or ["识别条件与设问", "写出关键依据或公式", "完成推导并给出结论"]
+    result["standard_answer"] = standard
+
+    answer = result.get("student_answer_analysis") if isinstance(result.get("student_answer_analysis"), dict) else {}
+    answer["answer_presence"] = str(answer.get("answer_presence") or ("已提供" if student_answer else "未提供"))
+    answer["extracted_work"] = str(answer.get("extracted_work") or student_answer or "")
+    answer["answer_status"] = str(answer.get("answer_status") or ("需要结合题干核对" if student_answer else "尚未提供作答"))
+    answer["likely_issue"] = str(answer.get("likely_issue") or ("请对照规范步骤定位最先偏离的位置" if student_answer else "补充学生答案后可进一步判断错因"))
+    answer["evidence"] = answer.get("evidence") if isinstance(answer.get("evidence"), list) else []
+    answer["next_action"] = str(answer.get("next_action") or ("对照分步路径复盘并完成一道同类题" if student_answer else "补充作答过程或批改痕迹"))
+    result["student_answer_analysis"] = answer
+
+    strategy = result.get("learning_strategy") if isinstance(result.get("learning_strategy"), dict) else {}
+    strategy["decomposition_answer"] = str(strategy.get("decomposition_answer") or decomposition["total_formula"])
+    strategy["make_it_easier"] = str(strategy.get("make_it_easier") or "先完成一个更小的同型题，掌握关键步骤后再回到原题。")
+    strategy["entry_point"] = str(strategy.get("entry_point") or result["core_pattern"])
+    strategy["teacher_hint"] = str(strategy.get("teacher_hint") or "这道题的设问要求什么？哪一个条件最先决定解题方法？")
+    strategy["cognitive_ladder"] = strategy.get("cognitive_ladder") if isinstance(strategy.get("cognitive_ladder"), list) and strategy.get("cognitive_ladder") else ["读懂设问", "识别题型", "完成分步作答"]
+    strategy["micro_drills"] = strategy.get("micro_drills") if isinstance(strategy.get("micro_drills"), list) and strategy.get("micro_drills") else ["用一句话概括题型", "只写第一步依据或公式"]
+    result["learning_strategy"] = strategy
+
+    result.setdefault("cleaned_question", question_text)
+    result.setdefault("practice_variants", [])
+    return _replace_placeholder_tree(repair_text_tree(result))
+
+
+def text_quality_issues(value: object) -> list[str]:
+    text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+    issues = []
+    if _mojibake_score(text) or "�" in text:
+        issues.append("mojibake")
+    if "未返回" in text:
+        issues.append("unhelpful_placeholder")
+    if any(ord(char) < 32 and char not in "\n\r\t" for char in text):
+        issues.append("control_character")
+    return issues
+
+
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
@@ -719,6 +855,11 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
                 item[key] = json.loads(item[key])
             except json.JSONDecodeError:
                 pass
+    item = repair_text_tree(item)
+    if isinstance(item.get("diagnosis"), dict):
+        item["diagnosis"] = normalize_diagnosis_payload(
+            item["diagnosis"], str(item.get("corrected_text") or item.get("ocr_text") or ""), str(item.get("student_wrong_answer") or "")
+        )
     return item
 
 
@@ -1778,7 +1919,7 @@ def diagnose_with_llm(
             "teacher_hint": "è¿™é“é¢˜ç¬¬ä¸€çœ¼æœ€åƒå“ªä¸€ç±»ä½ å·²ç»åšè¿‡çš„é¢˜ï¼Ÿ",
         },
     )
-    return result
+    return normalize_diagnosis_payload(result, question_text, wrong_answer)
 
 
 def grade_with_llm(variant: dict, answer_text: str, diagnosis: dict | None, model_id: str | None = None) -> dict:
@@ -2924,7 +3065,8 @@ def generate_rag_study_os(topic: str, hits: list[dict]) -> dict:
 def normalize_agent_result(result: dict, question_text: str, subject: str, student_answer: str) -> dict:
     if not isinstance(result, dict):
         result = {}
-    subject_name = result.get("subject") or subject or "è‡ªåŠ¨è¯†åˆ«"
+    result = repair_text_tree(result)
+    subject_name = result.get("subject") or subject or "自动识别"
     structured = result.get("structured_question") or {}
     quick = result.get("quick_answer") or {}
     result.setdefault("title", compact_text(structured.get("target") or result.get("question_type") or question_text, 42))
@@ -2999,7 +3141,7 @@ def normalize_agent_result(result: dict, question_text: str, subject: str, stude
             "next_action": layer.get("next_action") or "è¿›å…¥ä¸‹ä¸€å±‚å¤„ç†",
         })
     result["layers"] = normalized_layers
-    return result
+    return _replace_placeholder_tree(repair_text_tree(result))
 
 
 def agent_prompt_messages(subject: str, question_text: str, student_answer: str, rag_context: str = "") -> list[dict]:
