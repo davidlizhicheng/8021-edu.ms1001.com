@@ -44,6 +44,31 @@ const FILE_ACCEPT = ".pdf,.docx,.txt,.md,.csv,.json,image/*";
 
 const PAPER_STATE_LABELS = { correct:"正确", wrong:"错误", partial:"部分正确", blank:"空白", review_required:"需复核" };
 
+const TOOL_WORKFLOWS = {
+  "wrong-transfer": { title:"错题八步拆解", note:"还原作答、定位错因，再匹配母题和巩固训练。", fields:[{k:"grade",l:"年级",v:["初一","初二","初三","高一","高二","高三"]},{k:"subject",l:"学科",v:["数学","英语","语文","物理","化学"]},{k:"focus",l:"当前卡点",p:"不会起步、计算失误、模型不熟……"}] },
+  "paper-analysis": { title:"卷后提分分析", note:"先填写考试信息和分数，再上传整张卷面。", fields:[{k:"grade",l:"年级",v:["初一","初二","初三","高一","高二","高三"]},{k:"exam",l:"考试",v:["月考","期中","期末","周测","模拟考"]},{k:"subject",l:"学科",v:["数学","英语","语文","物理","化学","生物","历史","地理","政治"]},{k:"score",l:"本次得分",t:"number"},{k:"total",l:"卷面总分",t:"number"},{k:"target",l:"下次目标",t:"number"}] },
+  "paper-variant": { title:"试卷变式机", note:"保留原卷考点结构，控制变式幅度与答案版本。", fields:[{k:"grade",l:"年级",v:["初三","高一","高二","高三"]},{k:"difficulty",l:"变式难度",v:["基础","同等","提高"]},{k:"ratio",l:"变式系数",v:["轻度 30%","标准 60%","深度 90%"]},{k:"answers",l:"答案与解析",v:["教师版显示","学生版隐藏"]}] },
+  "ai-paper": { title:"AI 分层出题", note:"按知识点、题型、数量与难度生成可打印试卷。", fields:[{k:"grade",l:"年级",v:["小学","初一","初二","初三","高一","高二","高三"]},{k:"subject",l:"学科",v:["数学","英语","语文","物理","化学"]},{k:"types",l:"题型",p:"选择题、填空题、解答题"},{k:"count",l:"题目数量",t:"number"},{k:"difficulty",l:"难度",v:["基础","标准","拔高"]}] },
+  "paper-word": { title:"题卷重排 Word", note:"识别题号、选项、图表和公式，输出可编辑文档。", fields:[{k:"paper",l:"版式",v:["A4 双栏","A4 单栏","答题卡分离"]},{k:"answers",l:"答案位置",v:["文末集中","逐题显示","不显示"]},{k:"latex",l:"公式处理",v:["Mogan LaTeX 保真","Word 线性公式"]}] },
+  "image-teacher": { title:"教学配图生成", note:"明确课堂场景、知识点、画幅与标注要求。", fields:[{k:"scene",l:"使用场景",v:["课堂讲解","讲义插图","知识卡片","实验示意"]},{k:"style",l:"画面风格",v:["教科书图解","信息图","写实","手绘"]},{k:"ratio",l:"画幅",v:["16:9","4:3","1:1","A4 竖版"]},{k:"labels",l:"必须出现的标注",p:"输入中文标注词"}] },
+  "ppt-review": { title:"试卷讲评课件", note:"从整卷错因生成班级讲评结构和可编辑 PPT。", fields:[{k:"grade",l:"年级",v:["初三","高一","高二","高三"]},{k:"lessons",l:"课时",v:["1 课时","2 课时","3 课时"]},{k:"answers",l:"显示正确答案",v:["显示","隐藏"]},{k:"emphasis",l:"讲评重点",p:"高频错题、评分点、变式训练……"}] },
+  "aippt-online3": { title:"AI 课件在线生成", note:"根据主题和教学目标创建在线可编辑课件。", fields:[{k:"topic",l:"课题",p:"例如：二次函数复习课"},{k:"audience",l:"学生层次",v:["基础薄弱","中等","拔高"]},{k:"duration",l:"授课时长",v:["20 分钟","40 分钟","80 分钟"]}] },
+  "review-skill": { title:"审题破题训练", note:"训练条件提取、问题转译和切入点判断。", fields:[{k:"stage",l:"学段",v:["小学","初中","高中"]},{k:"subject",l:"学科",v:["语文","数学","英语","物理","化学","生物","历史","地理","政治"]},{k:"thought",l:"当前思路",p:"写下你第一眼怎么想"}] },
+  "big-question": { title:"主观题采分拆解", note:"按分值拆解必要步骤、规范表达和常见失分点。", fields:[{k:"subject",l:"学科",v:["数学","物理","化学","语文","英语","历史","政治"]},{k:"points",l:"题目分值",t:"number"},{k:"answer",l:"学生作答",p:"粘贴当前答案或步骤"}] },
+  "word-paper": { title:"英语词汇组卷", note:"围绕李娜的初三英语教学生成分层词汇卷。", fields:[{k:"grade",l:"年级",v:["七年级","八年级","九年级","高一","高二","高三"]},{k:"difficulty",l:"难度",v:["基础","标准","提高"]},{k:"minutes",l:"时长",v:["15 分钟","30 分钟","45 分钟"]},{k:"focus",l:"命题重点",v:["听写默写","语境运用","中考提分"]},{k:"words",l:"今日单词",p:"每行一个单词或短语"}] },
+  "coverage-check": { title:"考点覆盖扫描", note:"对照考试大纲或教材目录检查已覆盖、遗漏和重复。", fields:[{k:"stage",l:"考试范围",v:["深圳中考","高考","校内期末"]},{k:"catalog",l:"大纲/目录",p:"粘贴章节与考点清单"},{k:"threshold",l:"目标覆盖率",v:["80%","90%","100%"]}] },
+  "sprint-plan": { title:"临考冲刺规划", note:"根据剩余天数、薄弱学科和可用时间排每日任务。", fields:[{k:"grade",l:"年级",v:["初三","高三"]},{k:"subject",l:"科目",v:["数学","英语","语文","物理","化学","全科"]},{k:"days",l:"剩余天数",t:"number"},{k:"minutes",l:"每日分钟",t:"number"},{k:"weak",l:"薄弱项",p:"列出最近三次考试失分点"}] },
+  "class-notes": { title:"课堂纪要整理", note:"把录音转写、板书与课件合成结构化课堂笔记。", fields:[{k:"subject",l:"学科",v:["数学","英语","语文","物理","化学"]},{k:"format",l:"笔记结构",v:["康奈尔笔记","知识树","时间线","问答卡"]},{k:"homework",l:"提取作业",v:["需要","不需要"]}] },
+  "preview-sheet": { title:"课前预习助手", note:"从课文或教材生成目标、知识清单、问题链和自测题。", fields:[{k:"grade",l:"年级",v:["小学","初中","高中"]},{k:"subject",l:"学科",v:["语文","英语","数学","物理","化学"]},{k:"questions",l:"自测题数量",t:"number"}] },
+  "loss-analysis": { title:"失分原因诊断", note:"按知识、方法、计算、审题和表达归类每一分。", fields:[{k:"subject",l:"学科",v:["数学","英语","语文","物理","化学"]},{k:"score",l:"得分/总分",p:"例如 82/120"},{k:"answer",l:"学生答案与正确答案",p:"逐题粘贴，题目间空一行"}] },
+  "question-sense": { title:"题型直觉训练", note:"只看题干信号先判断模型，再逐步揭示答案。", fields:[{k:"grade",l:"年级",v:["初三","高一","高二","高三"]},{k:"subject",l:"学科",v:["数学","英语","物理","化学"]},{k:"mode",l:"训练模式",v:["题型识别","切入点判断","模型调用"]},{k:"count",l:"训练轮数",t:"number"}] },
+  "knowledge-map": { title:"知识图谱绘制", note:"把概念、公式、先修关系和典型题型画成图。", fields:[{k:"topic",l:"知识点",p:"例如：二次函数、细胞分裂"},{k:"view",l:"图解视角",v:["概念关系","解题流程","时间演化","对比辨析"]},{k:"depth",l:"层级",v:["入门","中考","高考"]}] },
+  "ten-solutions": { title:"一题多解探索", note:"比较不同路径的前提、步骤、复杂度与适用边界。", fields:[{k:"subject",l:"学科",v:["数学","物理","化学"]},{k:"paths",l:"目标解法数",v:["3 种","5 种","尽可能多"]},{k:"compare",l:"比较维度",v:["最短步骤","最易理解","最适合考试"]}] },
+  "knowledge-explain": { title:"概念精讲助手", note:"按直觉、定义、例子、反例和自测逐层讲清。", fields:[{k:"grade",l:"年级",v:["小学","初中","高中"]},{k:"topic",l:"想弄懂的问题",p:"输入知识点或困惑"},{k:"style",l:"讲解方式",v:["生活类比","严格推导","图解优先","苏格拉底提问"]}] },
+  "essay-polish": { title:"表达润色教练", note:"保留原意，逐句解释中文或英文作文的用词升级。", fields:[{k:"language",l:"语言",v:["中文","英文"]},{k:"grade",l:"年级",v:["初三","高一","高二","高三"]},{k:"goal",l:"目标",v:["准确","生动","高级但自然","中考高分"]},{k:"essay",l:"作文正文",p:"粘贴完整作文"}] },
+  "score-action": { title:"目标分行动路线图", note:"从当前分、目标分和时间倒推出每周可执行任务。", fields:[{k:"current",l:"当前分",t:"number"},{k:"target",l:"目标分",t:"number"},{k:"total",l:"总分",t:"number"},{k:"weeks",l:"剩余周数",t:"number"},{k:"hours",l:"每周小时",t:"number"}] }
+};
+
 function prepareChineseWorkbench() {
   document.documentElement.lang = "zh-CN";
   document.title = "错题拆博士｜学生与教师学习工作台";
@@ -66,8 +91,6 @@ function prepareChineseWorkbench() {
   const topTitle = $(".topbar h1"); if (topTitle) topTitle.textContent = "错题学习工作台";
   const topEyebrow = $(".topbar .eyebrow"); if (topEyebrow) topEyebrow.textContent = "学生 · 教师共用";
   const topSub = $(".topbar-subtitle"); if (topSub) topSub.textContent = "整卷识别、八步拆题、巩固训练、间隔复习与学习档案";
-  const topbar = $(".topbar");
-  if (topbar) topbar.insertAdjacentHTML("beforeend", `<div class="workspace-account"><span id="workspaceAccountText">尚未登录</span><button id="workspaceLoginBtn" class="primary-btn" type="button">登录 / 注册</button></div>`);
   $(".tech-ribbon")?.remove();
   $(".student-mode-toggle")?.remove();
   $(".side-note")?.remove();
@@ -158,6 +181,12 @@ function bindSidebarMenu() {
 }
 
 function logoutPersonalAccount(){ clearToken(); state.user=null; updateAccountCard(); toast("已退出登录。"); }
+
+function accountDisplayName(user) {
+  if (!user) return "个人账号";
+  if (user.display_name) return user.display_name;
+  return String(user.email || "个人账号").replace(/@unified\.ms1001\.com$/i, "");
+}
 
 async function createPaperAnalysis() {
   const files = Array.from($("#paperFilesInput")?.files || []);
@@ -669,8 +698,11 @@ updateAccountCard = function updateAccountCardClean() {
   const sidebarName = $("#sidebarAccountName");
   const sidebarState = $("#sidebarAccountState");
   const sidebarButton = $("#sidebarLoginBtn");
-  if (sidebarName) sidebarName.textContent = state.user ? (state.user.email || "个人账号") : "个人账号";
-  if (sidebarState) sidebarState.textContent = state.user ? `${state.user.is_admin ? "最高权限" : "已登录"} · ${state.user.credits || 0}积分` : "尚未登录";
+  if (sidebarName) {
+    sidebarName.textContent = accountDisplayName(state.user);
+    sidebarName.title = state.user?.email || "";
+  }
+  if (sidebarState) sidebarState.textContent = state.user ? `${state.user.membership_tier === "special" ? "特设会员" : state.user.is_admin ? "最高权限" : "已登录"} · ${state.user.credits || 0}积分` : "尚未登录";
   if (sidebarButton) sidebarButton.textContent = state.user ? "退出登录" : "登录 / 注册";
   const title = $("#accountTitle");
   const desc = $("#accountDesc");
@@ -883,11 +915,9 @@ function renderPortalTools() {
     card.type = "button";
     const deliveryNote = tool.featured ? "核心闭环" : tool.delivery && tool.delivery !== "diagnose" ? deliveryLabel(tool.delivery) : "";
     card.innerHTML = `
-      <span class="tool-number">${escapeHtml(tool.number)}</span>
-      ${tool.featured ? '<span class="tool-feature-badge">核心</span>' : ""}
       <strong>${escapeHtml(tool.label)}</strong>
       <small>${escapeHtml(tool.tagline || tool.category)}</small>
-      <em>${escapeHtml(tool.category)}${deliveryNote ? ` · ${deliveryNote}` : ""}</em>
+      <em>${escapeHtml(tool.category)}${deliveryNote ? ` · ${deliveryNote}` : ""}</em><b aria-hidden="true">›</b>
     `;
     card.addEventListener("click", () => launchTool(tool.id));
     grid.appendChild(card);
@@ -915,15 +945,36 @@ function activeTool() {
 function updateToolRunner() {
   const tool = activeTool();
   if (!tool) return;
-  $("#toolRunnerTitle").textContent = tool.label;
-  $("#toolRunnerSubtitle").textContent = tool.tagline || "输入材料后生成可直接使用的结果。";
+  const workflow = TOOL_WORKFLOWS[tool.id] || { title:tool.label, note:tool.tagline, fields:[] };
+  $("#toolRunnerTitle").textContent = workflow.title || tool.label;
+  $("#toolRunnerSubtitle").textContent = workflow.note || tool.tagline || "输入材料后生成可直接使用的结果。";
   $("#toolRunnerBadge").textContent = tool.category || "AI工具";
   if ($("#toolSelect")) $("#toolSelect").value = tool.id;
+  renderDedicatedToolForm(workflow);
 }
 
-function launchTool(toolId) {
+function renderDedicatedToolForm(workflow) {
+  const root = $("#toolDedicatedForm");
+  if (!root) return;
+  root.innerHTML = (workflow.fields || []).map((field) => {
+    if (field.v) return `<label class="workflow-field"><span>${escapeHtml(field.l)}</span><select data-workflow-key="${escapeHtml(field.k)}">${field.v.map(value=>`<option>${escapeHtml(value)}</option>`).join("")}</select></label>`;
+    return `<label class="workflow-field"><span>${escapeHtml(field.l)}</span><input data-workflow-key="${escapeHtml(field.k)}" type="${field.t === "number" ? "number" : "text"}" placeholder="${escapeHtml(field.p || "请输入")}" /></label>`;
+  }).join("");
+}
+
+function collectWorkflowContext() {
+  return $$("#toolDedicatedForm [data-workflow-key]").map(node => {
+    const label = node.closest("label")?.querySelector("span")?.textContent || node.dataset.workflowKey;
+    return `${label}：${node.value || "未填写"}`;
+  }).join("\n");
+}
+
+function toolRoute(toolId) { return `/tools/${encodeURIComponent(toolId)}`; }
+
+function launchTool(toolId, updateHistory = true) {
   const tool = state.portalTools.find((item) => item.id === toolId);
   if (!tool) return;
+  if (updateHistory && location.pathname !== toolRoute(toolId)) history.pushState({toolId}, "", toolRoute(toolId));
   if (tool.route === "diagnose") {
     switchView("diagnose");
     return;
@@ -953,8 +1004,10 @@ async function runTool() {
     toast("请先选择工具。");
     return;
   }
-  const input = $("#toolInput").value.trim();
-  if (!input) {
+  const material = $("#toolInput").value.trim();
+  const workflowContext = collectWorkflowContext();
+  const input = `${workflowContext}${material ? `\n\n用户材料：\n${material}` : ""}`.trim();
+  if (!material && !workflowContext) {
     toast("请先输入材料或上传文件。");
     return;
   }
@@ -1142,7 +1195,7 @@ function renderSidebarTools() {
       button.className = "sidebar-tool-item";
       button.type = "button";
       button.dataset.sidebarTool = tool.id;
-      button.innerHTML = `<span>${escapeHtml(tool.number)}</span><strong>${escapeHtml(tool.label)}</strong><small>${escapeHtml(tool.category || "AI工具")}</small>`;
+      button.innerHTML = `<strong>${escapeHtml(tool.label)}</strong><span aria-hidden="true">›</span>`;
       button.addEventListener("click", () => {
         launchTool(tool.id);
         closeSidebarMenu();
@@ -2659,6 +2712,13 @@ function switchView(view) {
   if (view === "admin") loadAdmin().catch((err) => toast(err.message));
 }
 
+function restoreRouteFromLocation() {
+  const match = location.pathname.match(/^\/tools\/([a-z0-9-]+)\/?$/i);
+  if (!match || !state.portalTools.length) return;
+  const toolId = decodeURIComponent(match[1]);
+  if (state.portalTools.some(tool => tool.id === toolId)) launchTool(toolId, false);
+}
+
 function bindEvents() {
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
   $("#portalStartBtn")?.addEventListener("click", () => switchView("diagnose"));
@@ -2844,6 +2904,7 @@ prepareChineseWorkbench();
 bindEvents();
 bindDashboard();
 bindSidebarMenu();
+window.addEventListener("popstate", restoreRouteFromLocation);
 setInputMode("image");
 setAuthMode("login");
 bindAllFileIngests();
@@ -2851,7 +2912,7 @@ state.studentMode = localStorage.getItem(STUDENT_MODE_KEY) !== "0";
 applyStudentMode();
 captureUnifiedTokenFromUrl();
 loadAppConfig().then(loadUser).catch((err) => toast(err.message));
-loadPortalTools().catch((err) => toast(err.message));
+loadPortalTools().then(restoreRouteFromLocation).catch((err) => toast(err.message));
 loadInstitutions().catch((err) => toast(err.message));
 loadAgentLayers().catch((err) => toast(err.message));
 loadModels().catch((err) => toast(err.message));

@@ -618,6 +618,9 @@ def public_user(row: sqlite3.Row | dict | None) -> dict | None:
     return {
         "id": item.get("id"),
         "email": item.get("email"),
+        "display_name": item.get("display_name") or "",
+        "membership_tier": item.get("membership_tier") or "standard",
+        "membership_expires_at": item.get("membership_expires_at"),
         "credits": int(item.get("credits") or 0),
         "created_at": item.get("created_at"),
         "is_admin": bool(int(item.get("is_admin") or 0)),
@@ -671,11 +674,17 @@ def ensure_user_from_unified_auth(conn: sqlite3.Connection, claims: dict) -> dic
     row = conn.execute("select * from app_users where email = ?", (email,)).fetchone()
     if not row:
         user_id = str(uuid.uuid4())
+        display_name = str(claims.get("name") or claims.get("username") or "").strip()
+        membership_tier = "special" if str(claims.get("tier") or "").lower() in {"vip", "admin"} else "standard"
         conn.execute(
-            "insert into app_users (id, email, password_hash, credits, created_at) values (?, ?, ?, ?, ?)",
-            (user_id, email, hash_password(secrets.token_urlsafe(24)), 9, now_iso()),
+            "insert into app_users (id, email, password_hash, credits, display_name, membership_tier, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, email, hash_password(secrets.token_urlsafe(24)), 9999 if membership_tier == "special" else 9, display_name, membership_tier, now_iso()),
         )
         row = conn.execute("select * from app_users where id = ?", (user_id,)).fetchone()
+    display_name = str(claims.get("name") or claims.get("username") or "").strip()
+    if display_name and row and not row["display_name"]:
+        conn.execute("update app_users set display_name = ? where id = ?", (display_name, row["id"]))
+        row = conn.execute("select * from app_users where id = ?", (row["id"],)).fetchone()
     return public_user(row)
 
 
@@ -997,6 +1006,9 @@ def init_db() -> None:
         ensure_table_column(conn, "tool_runs", "artifacts", "text")
         ensure_table_column(conn, "tool_runs", "report", "text")
         ensure_table_column(conn, "app_users", "is_admin", "integer not null default 0")
+        ensure_table_column(conn, "app_users", "display_name", "text")
+        ensure_table_column(conn, "app_users", "membership_tier", "text not null default 'standard'")
+        ensure_table_column(conn, "app_users", "membership_expires_at", "text")
         ensure_table_column(conn, "wrong_questions", "user_id", "text")
         ensure_table_column(conn, "wrong_questions", "institution_id", "text")
         ensure_table_column(conn, "wrong_questions", "institution_name", "text")
@@ -1141,7 +1153,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     upsert_chat_model(
         conn,
         "minimax-m3-default",
-        "MiniMax M3 è§†è§‰ OCR",
+        "MiniMax M3 视觉 OCR",
         "minimax",
         MINIMAX_ENDPOINT,
         "MiniMax-M3",
@@ -1151,23 +1163,11 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         max_tokens=7000,
         is_default=1,
     )
-    upsert_chat_model(
-        conn,
-        "deepseek-reasoner-default",
-        "DeepSeek æ‹†é¢˜å¢žå¼º",
-        "deepseek",
-        DEEPSEEK_ENDPOINT,
-        "deepseek-chat",
-        deepseek_key,
-        supports_vision=0,
-        temperature=0.25,
-        max_tokens=8000,
-        is_default=0,
-    )
+    conn.execute("delete from model_configs where provider = 'deepseek' or id = 'deepseek-reasoner-default'")
     upsert_chat_model(
         conn,
         "fenno-gpt-default",
-        "Fenno GPT æ‹†é¢˜",
+        "Fenno GPT 深度拆题",
         "fenno",
         FENNO_BASE_URL,
         "gpt-5.4",
@@ -3821,7 +3821,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": "not found"}, 404)
                     return
                 if path == "/api/models":
-                    rows = conn.execute("select * from model_configs order by is_default desc, updated_at desc").fetchall()
+                    rows = conn.execute("select * from model_configs where provider != 'deepseek' order by is_default desc, updated_at desc").fetchall()
                     self.send_json([public_model(row) for row in rows])
                     return
                 if path == "/api/image-models":
@@ -4579,6 +4579,8 @@ class AppHandler(BaseHTTPRequestHandler):
             path = "/org.html"
         if path == "/org-admin":
             path = "/org-admin.html"
+        if re.fullmatch(r"/tools/[a-z0-9-]+/?", path):
+            path = "/index.html"
         safe_path = path.lstrip("/").replace("..", "")
         file_path = PUBLIC_DIR / safe_path
         if not file_path.exists() or not file_path.is_file():
