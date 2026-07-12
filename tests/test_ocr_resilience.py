@@ -89,5 +89,31 @@ class OcrImageNormalizationTests(unittest.TestCase):
         self.assertFalse(metadata["processed"])
 
 
+class PaperSourceValidationTests(unittest.TestCase):
+    def test_rejects_docx_zip_bytes_decoded_as_text(self):
+        with self.assertRaisesRegex(ValueError, "二进制"):
+            server.validate_paper_source_text("PK\x03\x04\x00\x00word/embeddings/oleObject1.bin")
+
+    def test_rejects_replacement_character_garbage(self):
+        with self.assertRaisesRegex(ValueError, "乱码"):
+            server.validate_paper_source_text("第7题" + "�" * 30 + "无法识别的内容")
+
+    def test_accepts_normal_numbered_paper_text(self):
+        text = "1. 计算 1+1\n2. 计算 2+2"
+        self.assertEqual(server.validate_paper_source_text(text), text)
+
+    def test_docx_page_uses_document_extractor(self):
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("1. 计算 1+1")
+        buffer = BytesIO()
+        document.save(buffer)
+        data_url = "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+        source_url, source_text = server.prepare_paper_page({"name": "paper.docx", "file_data_url": data_url})
+        self.assertIsNone(source_url)
+        self.assertEqual(source_text, "1. 计算 1+1")
+
+
 if __name__ == "__main__":
     unittest.main()

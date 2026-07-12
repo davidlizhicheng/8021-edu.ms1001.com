@@ -1417,6 +1417,31 @@ def extract_document_from_data_url(filename: str, data_url: str) -> dict:
     }
 
 
+def validate_paper_source_text(value: object) -> str:
+    """Reject archive/binary payloads before they can become OCR question text."""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("试卷文本为空")
+    prefix = text[:32]
+    if prefix.startswith("PK\x03\x04") or "\x00" in text or "word/embeddings/" in text or "word/document.xml" in text:
+        raise ValueError("检测到二进制文档内容；Word/PDF必须通过文档上传方式解析，不能按纯文本读取")
+    replacement_ratio = text.count("�") / max(1, len(text))
+    control_count = sum(1 for char in text if ord(char) < 32 and char not in "\n\r\t")
+    if replacement_ratio > 0.02 or control_count / max(1, len(text)) > 0.01:
+        raise ValueError("试卷文本包含大量乱码或控制字符，请重新上传原始图片、DOCX、PDF或UTF-8文本")
+    return text
+
+
+def prepare_paper_page(page: dict) -> tuple[str | None, str]:
+    if page.get("image_data_url"):
+        return save_data_url(page.get("image_data_url")), ""
+    if page.get("file_data_url"):
+        filename = str(page.get("name") or "upload.txt")
+        extracted = extract_document_from_data_url(filename, str(page.get("file_data_url") or ""))
+        return None, validate_paper_source_text(extracted.get("text"))
+    return None, validate_paper_source_text(page.get("text"))
+
+
 def normalize_endpoint(value: str | None, kind: str) -> str:
     endpoint = (value or "").strip().rstrip("/")
     if not endpoint:
@@ -3701,8 +3726,9 @@ def process_paper_job(paper_id: str, model_id: str | None = None) -> None:
                 result = best_of_two_paper_ocr(image_url_to_data_url(page["source_url"]), model_id)
                 questions = result.get("questions") or []
             else:
-                result = {"page_text": page["source_text"] or "", "page_confidence": 0.82}
-                questions = split_numbered_questions(page["source_text"] or "")
+                source_text = validate_paper_source_text(page["source_text"] or "")
+                result = {"page_text": source_text, "page_confidence": 0.82, "parse_mode": "document_text"}
+                questions = split_numbered_questions(source_text)
             with db() as conn:
                 conn.execute("update paper_pages set ocr_result=?,confidence=? where id=?", (json.dumps(result, ensure_ascii=False), float(result.get("page_confidence") or 0), page["id"]))
             for question in questions:
@@ -4150,16 +4176,22 @@ class AppHandler(BaseHTTPRequestHandler):
                     pages = [{"text": data.get("paper_text")}]
                 if not pages:
                     self.send_json({"error":"请上传至少一页试卷或提供试卷文本"},400); return
+                prepared_pages = []
+                try:
+                    for page in pages:
+                        if not isinstance(page, dict):
+                            page = {"text": request_text(page)}
+                        prepared_pages.append(prepare_paper_page(page))
+                except (ValueError, RuntimeError) as exc:
+                    self.send_json({"error": str(exc)}, 400); return
                 paper_id, job_id, ts = str(uuid.uuid4()), str(uuid.uuid4()), now_iso()
                 with db() as conn:
                     user = current_user_from_request(conn, self.headers)
                     conn.execute("insert into exam_papers (id,user_id,title,subject,status,source_name,summary,progress,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?)",
                                  (paper_id,request_text(user.get("id")) if user else None,title,request_text(data.get("subject"),"自动识别"),"queued",request_text(data.get("source_name"),title),"{}",0,ts,ts))
-                    for page_no, page in enumerate(pages, start=1):
-                        if not isinstance(page, dict): page = {"text": request_text(page)}
-                        source_url = save_data_url(page.get("image_data_url")) if page.get("image_data_url") else None
+                    for page_no, (source_url, source_text) in enumerate(prepared_pages, start=1):
                         conn.execute("insert into paper_pages (id,paper_id,page_no,source_url,source_text,ocr_result,confidence) values (?,?,?,?,?,?,?)",
-                                     (str(uuid.uuid4()),paper_id,page_no,source_url,request_text(page.get("text")),"{}",0))
+                                     (str(uuid.uuid4()),paper_id,page_no,source_url,source_text,"{}",0))
                     conn.execute("insert into paper_jobs (id,paper_id,status,progress,message,attempts,created_at,updated_at) values (?,?,?,?,?,?,?,?)",
                                  (job_id,paper_id,"queued",0,"等待分析",0,ts,ts))
                 threading.Thread(target=process_paper_job,args=(paper_id,data.get("model_id")),daemon=True,name=f"paper-{paper_id[:8]}").start()

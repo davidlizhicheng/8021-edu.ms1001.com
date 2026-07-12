@@ -195,7 +195,8 @@ async function createPaperAnalysis() {
   const pages = [];
   for (const file of files) {
     if (file.type.startsWith("image/")) pages.push({ image_data_url: await readFileAsDataUrl(file), name:file.name });
-    else pages.push({ text: await file.text(), name:file.name });
+    else if (/\.(txt|md)$/i.test(file.name)) pages.push({ text: await file.text(), name:file.name });
+    else pages.push({ file_data_url: await readFileAsDataUrl(file), name:file.name });
   }
   renderPaperJob({ status:"uploading", progress:1, title:"正在上传并读取试卷" });
   const done = setBusy($("#analyzePaperBtn"), "正在上传...");
