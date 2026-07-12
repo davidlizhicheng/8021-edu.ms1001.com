@@ -83,11 +83,12 @@ function prepareChineseWorkbench() {
     paperView.appendChild(paperWorkbench);
     main.appendChild(paperView);
   }
-  const toolPanel = $(".portal-tools-panel"), dashboard = $("#dualDashboard");
-  if (toolPanel && dashboard) {
+  const toolPanel = $(".portal-tools-panel"), dashboard = $("#dualDashboard"), dashboardWelcome = dashboard?.querySelector(".dashboard-welcome");
+  if (toolPanel && dashboardWelcome) {
     toolPanel.classList.add("home-tool-matrix");
-    dashboard.insertAdjacentElement("afterend", toolPanel);
+    dashboardWelcome.insertAdjacentElement("afterend", toolPanel);
     const heading = toolPanel.querySelector("h2"); if (heading) heading.textContent = "全部22个学习与教学功能";
+    const subtitle = toolPanel.querySelector(".section-subtitle"); if (subtitle) subtitle.textContent = "试卷、错题、讲评、命题、课件、配图、规划与档案，一处直接进入。";
   }
   applyWorkMode(state.workMode);
 }
