@@ -1,28 +1,35 @@
 <!doctype html>
-<html lang="zh-CN" data-ms1001-chrome="on" data-ms1001-chrome-layout="sidebar">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI错题拆博士®---AI中高考错题难题拆解提分博士</title>
+    <title>错题拆博士｜学生与教师学习工作台</title>
     <link rel="icon" href="data:," />
     <script>localStorage.setItem('ms1001-lang','zh');localStorage.setItem('ms1001-account-lang','zh');document.documentElement.lang='zh-CN';</script>
-    <link rel="stylesheet" href="/styles.css?v=20260712matrix6" />
+    <link rel="stylesheet" href="/styles.css?v=20260712sidebar8" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
       <script src="https://ai.ms1001.com/shared/ms1001-theme-boot.js?v=20260709brandmatch"></script>
-      <link rel="stylesheet" href="https://ai.ms1001.com/shared/ms1001-chrome.css?v=20260709brandmatch" data-ms1001-chrome-css="1" />
   </head>
   <body>
     <div class="shell">
       <aside class="sidebar">
+        <a class="company-brand" href="https://ai.ms1001.com" aria-label="返回 AI 智能体矩阵">
+          <img src="https://ai.ms1001.com/assets/amazing-logo.jpg" alt="公司 Logo" />
+          <span><strong>AI智能体矩阵</strong><small>了不起科技</small></span>
+        </a>
         <div class="brand">
           <div class="mark">博</div>
           <div>
-            <strong>AI错题拆博士<sup class="brand-reg">®</sup></strong>
-            <span>AI中高考错题难题拆解提分博士</span>
+            <strong>错题拆博士</strong>
+            <span>让每一道错题都有结果</span>
           </div>
         </div>
 
-        <div class="sidebar-body">
+        <button class="sidebar-menu-toggle" id="sidebarMenuToggle" type="button" aria-expanded="false" aria-controls="sidebarBody">
+          <span>功能导航</span><b aria-hidden="true">☰</b>
+        </button>
+
+        <div class="sidebar-body" id="sidebarBody">
         <nav class="nav">
           <button class="nav-item active" data-view="portal">
             <span class="nav-icon">00</span>
@@ -68,6 +75,11 @@
           </button>
         </nav>
 
+        <section class="sidebar-tool-section" aria-labelledby="sidebarToolTitle">
+          <div class="sidebar-section-title"><span id="sidebarToolTitle">22 个学习与教学工具</span><small>点击直接进入</small></div>
+          <div class="sidebar-tool-list" id="sidebarToolList"></div>
+        </section>
+
         <div class="institution-entry">
           <a href="/org" class="primary-btn">机构站点</a>
           <a href="/org-admin" class="ghost-btn">机构管理</a>
@@ -85,9 +97,9 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <p class="eyebrow">AI错题拆博士<sup class="brand-reg">®</sup> v0.2</p>
-            <h1 class="brand-headline">AI错题拆博士<sup class="brand-reg">®</sup>---AI中高考错题难题拆解提分博士</h1>
-            <p class="topbar-subtitle">一个平台，装下全学段AI 学习工具箱，支持你冲击中高考。</p>
+            <p class="eyebrow">学生 · 教师共用</p>
+            <h1 class="brand-headline">错题学习工作台</h1>
+            <p class="topbar-subtitle">整卷识别、八步拆题、巩固训练、间隔复习与学习档案</p>
             <div class="tech-ribbon">
               <span class="tech-ribbon-core">错题拆解闭环</span>
               <span>视觉 OCR</span>
@@ -1168,7 +1180,6 @@
     <div id="toast" class="toast hidden"></div>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-    <script defer src="/app.js?v=20260712matrix6"></script>
-      <script src="https://ai.ms1001.com/shared/ms1001-site-boot.js?v=20260709brandmatch" defer></script>
+    <script defer src="/app.js?v=20260712sidebar8"></script>
   </body>
 </html>

@@ -59,7 +59,7 @@ function prepareChineseWorkbench() {
     <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>历史记录</span></button>
     <button class="nav-item" data-view="tool"><span class="nav-icon">工</span><span data-nav-label>20个工作台</span></button>
     <button class="nav-item hidden" id="adminNavItem" data-view="admin"><span class="nav-icon">管</span><span>后台管理</span></button>`;
-  if (nav) nav.insertAdjacentHTML("afterend", `<section class="sidebar-account" aria-label="个人账号">
+  if (nav) $(".brand")?.insertAdjacentHTML("beforebegin", `<section class="sidebar-account" aria-label="个人账号">
     <div class="sidebar-account-head"><span class="sidebar-avatar">我</span><div><strong id="sidebarAccountName">个人账号</strong><small id="sidebarAccountState">尚未登录</small></div></div>
     <button id="sidebarLoginBtn" class="sidebar-action primary" type="button">登录 / 注册</button>
   </section>`);
@@ -83,10 +83,10 @@ function prepareChineseWorkbench() {
     paperView.appendChild(paperWorkbench);
     main.appendChild(paperView);
   }
-  const toolPanel = $(".portal-tools-panel"), dashboard = $("#dualDashboard"), dashboardWelcome = dashboard?.querySelector(".dashboard-welcome");
-  if (toolPanel && dashboardWelcome) {
+  const toolPanel = $(".portal-tools-panel"), dashboard = $("#dualDashboard"), teacherActions = $("#teacherDashboardActions");
+  if (toolPanel && dashboard && teacherActions) {
     toolPanel.classList.add("home-tool-matrix");
-    dashboardWelcome.insertAdjacentElement("afterend", toolPanel);
+    teacherActions.insertAdjacentElement("afterend", toolPanel);
     const heading = toolPanel.querySelector("h2"); if (heading) heading.textContent = "全部22个学习与教学功能";
     const subtitle = toolPanel.querySelector(".section-subtitle"); if (subtitle) subtitle.textContent = "试卷、错题、讲评、命题、课件、配图、规划与档案，一处直接进入。";
   }
@@ -140,6 +140,21 @@ function bindDashboard() {
     else if (action==="library"||action==="today") switchView(action==="library"?"library":"portal");
     else if (action==="report") switchView("report"); else if (action==="profile") switchView("profile");
   }));
+}
+
+function closeSidebarMenu() {
+  const sidebar = $(".sidebar"), toggle = $("#sidebarMenuToggle");
+  sidebar?.classList.remove("is-open");
+  toggle?.setAttribute("aria-expanded", "false");
+}
+
+function bindSidebarMenu() {
+  const sidebar = $(".sidebar"), toggle = $("#sidebarMenuToggle");
+  toggle?.addEventListener("click", () => {
+    const open = !sidebar?.classList.contains("is-open");
+    sidebar?.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
 }
 
 function logoutPersonalAccount(){ clearToken(); state.user=null; updateAccountCard(); toast("已退出登录。"); }
@@ -764,6 +779,7 @@ function showTerms(type) {
 async function loadPortalTools() {
   state.portalTools = await api("/api/portal-tools");
   renderPortalTools();
+  renderSidebarTools();
   renderToolSelect();
 }
 
@@ -1112,6 +1128,27 @@ async function searchRagForCurrentQuestion() {
   } finally {
     done();
   }
+}
+
+function renderSidebarTools() {
+  const root = $("#sidebarToolList");
+  if (!root) return;
+  root.innerHTML = "";
+  state.portalTools
+    .slice()
+    .sort((a, b) => Number(a.number) - Number(b.number))
+    .forEach((tool) => {
+      const button = document.createElement("button");
+      button.className = "sidebar-tool-item";
+      button.type = "button";
+      button.dataset.sidebarTool = tool.id;
+      button.innerHTML = `<span>${escapeHtml(tool.number)}</span><strong>${escapeHtml(tool.label)}</strong><small>${escapeHtml(tool.category || "AI工具")}</small>`;
+      button.addEventListener("click", () => {
+        launchTool(tool.id);
+        closeSidebarMenu();
+      });
+      root.appendChild(button);
+    });
 }
 
 function renderRagStudyPanel(title, html) {
@@ -2600,6 +2637,7 @@ function switchView(view) {
   const target = $(`#view-${view}`);
   if (!target) return;
   target.classList.add("active");
+  closeSidebarMenu();
   if (view === "portal") {
     if (!state.portalTools.length) loadPortalTools().catch((err) => toast(err.message));
     updateAccountCard();
@@ -2805,6 +2843,7 @@ function bindEvents() {
 prepareChineseWorkbench();
 bindEvents();
 bindDashboard();
+bindSidebarMenu();
 setInputMode("image");
 setAuthMode("login");
 bindAllFileIngests();
