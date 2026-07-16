@@ -4,9 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>错题拆博士｜学生与教师学习工作台</title>
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="/assets/cuotiboshi-logo.svg" />
     <script>localStorage.setItem('ms1001-lang','zh');localStorage.setItem('ms1001-account-lang','zh');document.documentElement.lang='zh-CN';</script>
-    <link rel="stylesheet" href="/styles.css?v=20260712workflows9" />
+    <link rel="stylesheet" href="/styles.css?v=20260716guided9" />
+    <link rel="stylesheet" href="/styles-gaokao-search.css?v=20260716guided9" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
       <script src="https://ai.ms1001.com/shared/ms1001-theme-boot.js?v=20260709brandmatch"></script>
   </head>
@@ -14,11 +15,14 @@
     <div class="shell">
       <aside class="sidebar">
         <a class="company-brand" href="https://ai.ms1001.com" aria-label="返回 AI 智能体矩阵">
-          <img src="https://ai.ms1001.com/assets/amazing-logo.jpg" alt="公司 Logo" />
-          <span><strong>AI智能体矩阵</strong><small>了不起科技</small></span>
+          <img src="https://ai.ms1001.com/assets/agent-matrix-logo.png" alt="AI智能体应用研发社群 Logo" />
+          <span class="platform-stack">
+            <strong>AI智能体矩阵</strong>
+            <small>大湾区AI社群</small>
+          </span>
         </a>
         <div class="brand">
-          <div class="mark">博</div>
+          <img class="product-logo" src="/assets/cuotiboshi-logo.svg" alt="错题网 Logo" />
           <div>
             <strong>错题拆博士</strong>
             <span>让每一道错题都有结果</span>
@@ -31,48 +35,15 @@
 
         <div class="sidebar-body" id="sidebarBody">
         <nav class="nav">
-          <button class="nav-item active" data-view="portal">
-            <span class="nav-icon">00</span>
-            <span>工具门户</span>
-          </button>
-          <button class="nav-item nav-core" data-view="diagnose">
-            <span class="nav-icon">01</span>
-            <span>错题拆解</span>
-            <span class="nav-badge">核心</span>
-          </button>
-          <button class="nav-item nav-agent" data-view="agent">
-            <span class="nav-icon">AI</span>
-            <span>解题智能体</span>
-            <span class="nav-badge">分层</span>
-          </button>
-          <button class="nav-item" data-view="library">
-            <span class="nav-icon">02</span>
-            <span>我的错题本</span>
-          </button>
-          <button class="nav-item" data-view="tool" data-student-hide>
-            <span class="nav-icon">03</span>
-            <span>通用工具</span>
-          </button>
-          <button class="nav-item" data-view="history" data-student-hide>
-            <span class="nav-icon">04</span>
-            <span>生成历史</span>
-          </button>
-          <button class="nav-item" data-view="report">
-            <span class="nav-icon">05</span>
-            <span>能力报告</span>
-          </button>
-          <button class="nav-item" data-view="profile">
-            <span class="nav-icon">06</span>
-            <span>个人档案</span>
-          </button>
-          <button class="nav-item" data-view="mothers" data-student-hide>
-            <span class="nav-icon">07</span>
-            <span>母题预留</span>
-          </button>
-          <button class="nav-item hidden" id="adminNavItem" data-view="admin">
-            <span class="nav-icon">08</span>
-            <span>后台配置</span>
-          </button>
+          <button class="nav-item active" data-view="portal"><span class="nav-icon">首</span><span data-nav-label>学习首页</span></button>
+          <button class="nav-item nav-core" data-view="paper"><span class="nav-icon">卷</span><span data-nav-label>试卷分析</span></button>
+          <button class="nav-item nav-core" data-view="diagnose"><span class="nav-icon">题</span><span data-nav-label>错题分析</span></button>
+          <button class="nav-item nav-core" data-view="gaokao-zone"><span class="nav-icon">数</span><span data-nav-label>高考数学专区</span></button>
+          <button class="nav-item" data-view="library"><span class="nav-icon">本</span><span data-nav-label>我的错题本</span></button>
+          <button class="nav-item" data-view="report"><span class="nav-icon">报</span><span data-nav-label>学习报告</span></button>
+          <button class="nav-item" data-view="history"><span class="nav-icon">史</span><span data-nav-label>历史记录</span></button>
+          <button class="nav-item" data-view="tool"><span class="nav-icon">工</span><span data-nav-label>22个工作台</span></button>
+          <button class="nav-item hidden" id="adminNavItem" data-view="admin"><span class="nav-icon">管</span><span>后台管理</span></button>
         </nav>
 
         <section class="sidebar-tool-section" aria-labelledby="sidebarToolTitle">
@@ -98,15 +69,8 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">学生 · 教师共用</p>
-            <h1 class="brand-headline">错题学习工作台</h1>
-            <p class="topbar-subtitle">整卷识别、八步拆题、巩固训练、间隔复习与学习档案</p>
-            <div class="tech-ribbon">
-              <span class="tech-ribbon-core">错题拆解闭环</span>
-              <span>视觉 OCR</span>
-              <span>巩固过关</span>
-              <span>我的错题本</span>
-              <span>学习档案</span>
-            </div>
+            <h1 class="brand-headline">错题拆博士</h1>
+            <p class="topbar-subtitle">导入题目，直接开始 RAG 深拆</p>
           </div>
           <div class="model-switch">
             <label class="student-mode-toggle" title="隐藏通用工具，聚焦错题闭环">
@@ -122,9 +86,9 @@
           <section class="dual-dashboard" id="dualDashboard">
             <div class="dashboard-welcome">
               <div>
-                <span class="dashboard-kicker" id="dashboardKicker">今天从哪一步开始？</span>
-                <h2 id="dashboardTitle">把不会的题，真正练到会</h2>
-                <p id="dashboardLead">上传整张试卷或一道错题，系统会识别笔迹、定位错因，用八步法讲清楚，再安排巩固与复习。</p>
+                <span class="dashboard-kicker" id="dashboardKicker">错题分析 · 全站核心能力</span>
+                <h2 id="dashboardTitle">拍一道题，先判对错，再真正讲懂</h2>
+                <p id="dashboardLead">同时识别印刷题干、手写作答和教师批注。结果按八步逐屏出现：判分、错因、思路、多解、模型、复盘、卡片、5 题巩固。</p>
               </div>
               <div class="mode-switch" role="group" aria-label="工作台模式">
                 <button type="button" class="is-active" data-work-mode="student">学生模式</button>
@@ -132,15 +96,18 @@
               </div>
             </div>
             <div class="dashboard-actions" id="studentDashboardActions">
-              <button class="dashboard-action action-primary" type="button" data-dashboard-action="paper"><span>01</span><strong>上传整张试卷</strong><small>逐题识别笔迹、批改和错题</small></button>
-              <button class="dashboard-action" type="button" data-dashboard-action="single"><span>02</span><strong>拍一道错题</strong><small>立即进入八步法拆解</small></button>
+              <button class="dashboard-action action-primary action-diagnose" type="button" data-dashboard-action="single"><span>题</span><strong>拍照 / 上传一道题</strong><small>手写 OCR · 立即判分 · 八步讲懂</small><b>现在开始 →</b></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="paper"><span>卷</span><strong>上传整张试卷</strong><small>自动拆成多题并逐题入库</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="gaokao"><span>数</span><strong>高考数学专区</strong><small>2362 道母题 · 方法包 + RAG 深拆</small></button>
               <button class="dashboard-action" type="button" data-dashboard-action="today"><span>03</span><strong>今日复习</strong><small>完成到期任务和回炉训练</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="parent-weekly"><span>报</span><strong>家长周报</strong><small>近 7 天消灭进度摘要</small></button>
               <button class="dashboard-action" type="button" data-dashboard-action="library"><span>04</span><strong>我的错题本</strong><small>查看掌握度与训练进度</small></button>
             </div>
             <div class="dashboard-actions hidden" id="teacherDashboardActions">
               <button class="dashboard-action action-primary" type="button" data-dashboard-action="paper"><span>01</span><strong>新建全卷分析</strong><small>批量识别试卷与学生作答</small></button>
               <button class="dashboard-action" type="button" data-dashboard-action="review"><span>02</span><strong>待复核题目</strong><small>处理低置信度与批改争议</small></button>
               <button class="dashboard-action" type="button" data-dashboard-action="report"><span>03</span><strong>查看学情报告</strong><small>知识点失分与错因分布</small></button>
+              <button class="dashboard-action" type="button" data-dashboard-action="teacher-portal"><span>班</span><strong>班级与复核</strong><small>创建班级、导出待复核清单</small></button>
               <button class="dashboard-action" type="button" data-dashboard-action="profile"><span>04</span><strong>导出教学档案</strong><small>生成 Word 或 PDF 报告</small></button>
             </div>
             <div class="dashboard-overview">
@@ -256,16 +223,23 @@
             </div>
           </section>
 
-          <section class="panel portal-tools-panel" data-student-hide>
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Tool Matrix</p>
-                <h2>全科智能工具矩阵</h2>
-                <p class="section-subtitle">错题拆解置顶；另有文档整理、命题训练、课件辅助等 21 项工具。</p>
+          <section class="panel portal-tools-panel home-tool-matrix brand-phase-matrix toolbox-shell">
+            <div class="toolbox-hero">
+              <p class="eyebrow">AI 教学工具箱</p>
+              <h2>全部 22 个学习与教学功能</h2>
+              <p class="section-subtitle">试卷、错题、讲评、命题、课件、配图、规划与档案，一处直接进入。</p>
+              <div class="toolbox-hero-stats">
+                <span>22 个工具入口</span>
+                <span>试卷 / 错题 / 讲评 / 配图</span>
+                <span>面向一线教学工作流</span>
               </div>
+            </div>
+            <div class="panel-head toolbox-filter-head">
+              <div></div>
               <div class="portal-filter" id="portalCategoryFilter"></div>
             </div>
-            <div id="portalToolGrid" class="portal-tool-grid"></div>
+            <div id="portalToolPhases" class="portal-tool-phases"></div>
+            <div id="portalToolGrid" class="portal-tool-grid hidden"></div>
           </section>
         </section>
 
@@ -508,16 +482,34 @@
           </section>
         </section>
 
-        <section id="view-diagnose" class="view">
-          <section class="panel diagnose-intro-panel">
-            <div class="panel-head compact-head">
+        <section id="view-gaokao-zone" class="view">
+          <section class="panel">
+            <div class="panel-head">
               <div>
-                <p class="eyebrow">Core Workbench</p>
-                <h2>错题拆解工作台</h2>
-                <p class="section-subtitle">上传错题 → OCR 校准 → 超细拆题 → 巩固训练 → 自动写入我的错题本。</p>
+                <p class="eyebrow">Gaokao Math Zone</p>
+                <h2>高考数学专区 · 母题库</h2>
+                <p class="section-subtitle">上传《十年真题消消乐》《全国卷合集》等 PDF，自动拆分题目、提炼方法包，并建立 RAG 知识库。</p>
+              </div>
+              <button id="refreshGaokaoZoneBtn" class="ghost-btn" type="button">刷新</button>
+            </div>
+            <div id="gaokaoZoneStats" class="gaokao-zone-stats"></div>
+            <div class="gaokao-upload-grid">
+              <label class="file-dropzone" for="gaokaoPdfInput">
+                <input id="gaokaoPdfInput" type="file" accept=".pdf,application/pdf" />
+                <strong>上传高考数学 PDF</strong>
+                <small>支持讲义、真题合集；系统将按「讲次/年份」切块入库</small>
+              </label>
+              <div class="gaokao-upload-meta">
+                <input id="gaokaoDocTitle" class="text-input" placeholder="文档标题（可选）" />
+                <button id="gaokaoUploadBtn" class="primary-btn" type="button">导入题库</button>
+                <p id="gaokaoUploadStatus" class="muted small-note">尚未选择文件</p>
               </div>
             </div>
+            <div id="gaokaoDocList" class="gaokao-doc-list"></div>
           </section>
+        </section>
+
+        <section id="view-diagnose" class="view">
           <section class="panel paper-workbench" id="paperWorkbench">
             <div class="panel-head">
               <div>
@@ -547,139 +539,113 @@
             <div id="paperHistoryList" class="paper-history-list"></div>
             <div id="paperResult" class="paper-result hidden"></div>
           </section>
-          <div class="diagnose-progress" id="diagnoseProgress">
-            <span class="progress-step active" data-step="input">1 输入错题</span>
-            <span class="progress-step" data-step="diagnose">2 超细拆题</span>
-            <span class="progress-step" data-step="training">3 巩固过关</span>
-            <span class="progress-step" data-step="archive">4 沉淀错题本</span>
+          <div class="diagnose-stepbar" id="diagnoseStepbar" aria-label="错题八步拆解进度">
+            <button class="is-active" type="button" data-diagnose-step="1"><b>1</b><span>判分</span></button>
+            <button type="button" data-diagnose-step="2"><b>2</b><span>错因</span></button>
+            <button type="button" data-diagnose-step="3"><b>3</b><span>思路</span></button>
+            <button type="button" data-diagnose-step="4"><b>4</b><span>多解</span></button>
+            <button type="button" data-diagnose-step="5"><b>5</b><span>模型</span></button>
+            <button type="button" data-diagnose-step="6"><b>6</b><span>复盘</span></button>
+            <button type="button" data-diagnose-step="7"><b>7</b><span>卡片</span></button>
+            <button type="button" data-diagnose-step="8"><b>8</b><span>巩固</span></button>
           </div>
-          <div class="workflow-strip">
-            <span>01 输入层<br /><small>全科图片/文本</small></span>
-            <span>02 视觉层<br /><small>OCR 结构化</small></span>
-            <span>03 校准层<br /><small>题干与答案修正</small></span>
-            <span>04 推理层<br /><small>拆题与错因诊断</small></span>
-            <span>05 生成层<br /><small>多解/小诗/变式</small></span>
-            <span>06 训练层<br /><small>作答批改闭环</small></span>
-            <span>07 档案层<br /><small>分科沉淀导出</small></span>
-          </div>
-
-          <div class="workspace-grid">
+          <div class="workspace-grid guided-workspace">
             <section class="panel upload-panel">
               <div class="panel-head">
                 <div>
-                  <p class="eyebrow">Step 1</p>
-                  <h2>输入题目与作答</h2>
+                  <p class="eyebrow">只需一步</p>
+                  <h2>上传一道题</h2>
                 </div>
                 <button id="sampleBtn" class="ghost-btn" type="button">填入样例</button>
               </div>
 
               <div id="ocrCalibrationBanner" class="calibration-banner hidden">
                 <strong>请先校准题干</strong>
-                <p>OCR 置信度较低或题干可能有缺损，请修正「题目内容」后再拆解，避免在错误题目上生成长篇解析。</p>
+                <p id="ocrCalibrationReason">OCR 置信度较低或题干可能有缺损，请修正后再拆解。</p>
+                <ul id="ocrUncertainList" class="ocr-uncertain-list hidden"></ul>
               </div>
 
-              <label class="field">
-                <span>学科/场景</span>
-                <select id="subjectSelect" class="text-input">
-                  <option value="自动识别">自动识别</option>
-                  <option value="高中数学">高中数学</option>
-                  <option value="初中数学">初中数学</option>
-                  <option value="高中物理">高中物理</option>
-                  <option value="高中化学">高中化学</option>
-                  <option value="高中生物">高中生物</option>
-                  <option value="高中语文">高中语文</option>
-                  <option value="高中英语">高中英语</option>
-                  <option value="高中政治">高中政治</option>
-                  <option value="高中历史">高中历史</option>
-                  <option value="高中地理">高中地理</option>
-                  <option value="其他学科">其他学科</option>
-                </select>
-              </label>
-
-              <div class="input-mode-tabs" role="tablist" aria-label="输入方式">
-                <button class="input-mode active" type="button" data-input-mode="image">图片 OCR</button>
-                <button class="input-mode" type="button" data-input-mode="file">文件上传</button>
-                <button class="input-mode" type="button" data-input-mode="paste">直接粘贴</button>
-              </div>
-
-              <div id="imageInputBlock" class="input-mode-block">
-                <label class="dropzone" for="imageInput">
-                  <input id="imageInput" type="file" accept="image/*" multiple />
-                  <span class="drop-icon">+</span>
-                  <strong>选择题目/作答图片</strong>
-                  <small>可识别印刷题干、手写过程、红叉圈画和老师批注；清晰单题截图效果最好。</small>
-                </label>
-                <img id="previewImage" class="preview hidden" alt="题目预览" />
-
-                <button id="ocrBtn" class="secondary-btn" type="button">
-                  先做 OCR 识别
-                </button>
-              </div>
-
-              <div id="fileInputBlock" class="input-mode-block hidden">
-                <div class="file-ingest" data-target="questionText" data-ocr="true">
+              <div id="imageInputBlock" class="input-mode-block unified-question-import">
+                <div class="file-ingest" data-target="questionText" data-answer-target="wrongAnswer" data-ocr="true">
                   <label class="file-dropzone" for="diagnoseFileInput">
                     <input id="diagnoseFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
                     <span class="drop-icon">↑</span>
-                    <strong>上传试卷 / 作业 / 图片 / PDF / Word</strong>
-                    <small>文件会解析并写入「题目内容」框；图片会自动 OCR。支持多文件。</small>
+                    <strong>拍照或上传</strong>
+                    <small>题干 + 手写作答同框即可，自动 OCR 并判分</small>
                   </label>
                   <ul class="file-ingest-list" id="diagnoseFileList"></ul>
                 </div>
+                <label class="handwriting-toggle hidden">
+                  <input id="handwritingModeToggle" type="checkbox" checked />
+                  <span>手写识别</span>
+                </label>
               </div>
+              <div id="fileInputBlock" class="hidden"></div>
+              <div id="pasteInputBlock" class="hidden"></div>
 
-              <div id="pasteInputBlock" class="input-mode-block hidden">
-                <div class="paste-helper">
-                  <strong>无需图片也能拆题</strong>
-                  <span>把题干、选项、材料、学生答案或老师批注直接粘贴到下面两个框即可。</span>
-                </div>
-              </div>
+              <div id="detectedQuestions" class="detected-questions hidden" aria-live="polite"></div>
 
               <label class="field">
-                <span>题目内容（OCR 或直接粘贴）</span>
-                <div class="file-ingest compact-ingest" data-target="questionText" data-ocr="true">
-                  <label class="file-dropzone mini-dropzone" for="questionFileInput">
-                    <input id="questionFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
-                    <strong>附加文件到本题</strong>
-                    <small>PDF / Word / 图片 / TXT</small>
-                  </label>
-                  <ul class="file-ingest-list" id="questionFileList"></ul>
-                </div>
-                <textarea id="questionText" rows="8" placeholder="可 OCR 自动填入，也可粘贴或上传 PDF/Word/TXT/图片。支持题干、材料、选项、公式或实验信息。"></textarea>
+                <span>或直接粘贴题目</span>
+                <textarea id="questionText" rows="4" placeholder="粘贴题干。多道题请保留 1. 2. … 题号"></textarea>
               </label>
 
-              <label class="field">
-                <span>学生作答情况（可选）</span>
-                <div class="file-ingest compact-ingest" data-target="wrongAnswer" data-ocr="true">
-                  <label class="file-dropzone mini-dropzone" for="answerFileInput">
-                    <input id="answerFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
-                    <strong>附加作答文件</strong>
-                    <small>作业扫描 / 图片 / PDF</small>
-                  </label>
-                  <ul class="file-ingest-list" id="answerFileList"></ul>
-                </div>
-                <textarea id="wrongAnswer" rows="5" placeholder="可粘贴或上传学生答案、解题过程、错解、卡点、批注图片或 PDF/Word 作业。"></textarea>
-              </label>
+              <details class="diagnose-advanced">
+                <summary>更多选项</summary>
+                <label class="field">
+                  <span>学科</span>
+                  <select id="subjectSelect" class="text-input">
+                    <option value="自动识别">自动识别</option>
+                    <option value="高中数学">高中数学</option>
+                    <option value="初中数学">初中数学</option>
+                    <option value="高中物理">高中物理</option>
+                    <option value="高中化学">高中化学</option>
+                    <option value="高中生物">高中生物</option>
+                    <option value="高中语文">高中语文</option>
+                    <option value="高中英语">高中英语</option>
+                    <option value="高中政治">高中政治</option>
+                    <option value="高中历史">高中历史</option>
+                    <option value="高中地理">高中地理</option>
+                    <option value="其他学科">其他学科</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>学生作答（手写会自动填入）</span>
+                  <div class="file-ingest compact-ingest" data-target="wrongAnswer" data-ocr="true">
+                    <label class="file-dropzone mini-dropzone" for="answerFileInput">
+                      <input id="answerFileInput" type="file" class="file-ingest-input" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv,.json,image/*" />
+                      <strong>附加作答</strong>
+                    </label>
+                    <ul class="file-ingest-list" id="answerFileList"></ul>
+                  </div>
+                  <textarea id="wrongAnswer" rows="3" placeholder="手写答案自动写入，也可手动修正"></textarea>
+                </label>
+              </details>
 
-              <button id="diagnoseBtn" class="primary-btn" type="button">
-                开始错题拆解
-              </button>
+              <p id="solveModeHint" class="muted small-note">先判对错，再八步讲懂。多题会先列出清单供选择。</p>
+              <p id="handwritingPhotoTips" class="handwriting-photo-tips hidden">题干和手写答案可同框拍摄。</p>
+
+              <button id="diagnoseBtn" class="primary-btn" type="button">开始分析</button>
             </section>
 
             <section class="panel result-panel">
               <div class="panel-head">
                 <div>
-                  <p class="eyebrow">Step 2</p>
-                  <h2>拆题结果</h2>
+                  <p class="eyebrow">八步逐屏讲解</p>
+                  <h2>先给结果，再讲原因</h2>
                 </div>
                 <span id="resultStatus" class="tag muted">等待题目</span>
               </div>
+
+              <div id="searchStreamStatus" class="search-stream-status hidden"></div>
 
               <div id="emptyState" class="empty-state">
                 <div class="empty-ring">AI</div>
                 <h3>上传或粘贴一道题</h3>
                 <p>系统会识别题目与作答情况，再输出拆解公式、错因诊断、生活化比喻、解题模型、一题多解和复盘小诗。</p>
               </div>
+
+              <div id="searchResult" class="search-result hidden"></div>
 
               <div id="diagnosisResult" class="diagnosis hidden">
                 <div id="guestSaveBanner" class="guest-save-banner hidden">
@@ -694,10 +660,40 @@
                   <p id="confidenceText"></p>
                 </div>
 
+                <div id="approachThinkingBlock" class="approach-thinking-block">
+                  <span class="label">思路应该怎么想？</span>
+                  <p id="approachHow" class="compact-text"></p>
+                  <span class="label">为什么这么想？</span>
+                  <p id="approachWhy" class="compact-text"></p>
+                  <span class="label">根据哪些条件推断？</span>
+                  <div id="approachSignals" class="chip-row"></div>
+                </div>
+
+                <section id="crushPanel" class="crush-panel hidden">
+                  <div class="crush-panel-head">
+                    <div>
+                      <p class="eyebrow">Step 3 · 粉碎错因</p>
+                      <h3>八步粉碎链路</h3>
+                      <p class="compact-text">逐步定位断点：从识题型到验算迁移，把错因拆成可核对的小步。</p>
+                    </div>
+                    <span id="crushBadge" class="tag warn">粉碎中</span>
+                  </div>
+                  <div id="crushStepList" class="crush-step-list"></div>
+                  <div id="crushIssue" class="crush-issue"></div>
+                </section>
+
+                <div class="eliminate-banner" id="eliminateBanner">
+                  <div>
+                    <strong>消灭这道题</strong>
+                    <p id="eliminateHint">完成下方 5 道同类题，达到 4/5 即过关。</p>
+                  </div>
+                  <button id="eliminateBtn" class="primary-btn eliminate-btn" type="button">开始消灭训练</button>
+                </div>
+
                 <div class="standard-answer-card" id="standardAnswerBlock">
                   <div class="standard-answer-head">
                     <span class="label">标准答案</span>
-                    <button id="scrollToTrainingBtn" class="secondary-btn" type="button">去做巩固题</button>
+                    <button id="scrollToTrainingBtn" class="secondary-btn" type="button">去做消灭题</button>
                   </div>
                   <p id="finalAnswer" class="standard-answer-text"></p>
                   <details class="standard-solution-details">
@@ -771,6 +767,16 @@
                   <div>
                     <span class="label">微练习</span>
                     <div id="microDrills" class="chip-row"></div>
+                  </div>
+                </div>
+
+                <div id="answerVerdictCard" class="answer-verdict-card">
+                  <span class="label">第一步 · 这道题做对了没有？</span>
+                  <h3 id="answerVerdictLabel">等待判分</h3>
+                  <p id="answerVerdictHint" class="compact-text"></p>
+                  <div class="answer-verdict-grid">
+                    <div><span>学生作答</span><strong id="answerVerdictStudent">未识别</strong></div>
+                    <div><span>参考结论</span><strong id="answerVerdictStandard">待生成</strong></div>
                   </div>
                 </div>
 
@@ -866,10 +872,10 @@
           <section id="trainingPanel" class="panel training-panel hidden">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Step 3</p>
-                <h2>三道巩固题</h2>
+                <p class="eyebrow">Step 4 · 消灭这道题</p>
+                <h2>三道消灭训练题</h2>
               </div>
-              <span id="passBadge" class="tag muted">训练中 · 2/3 题正确即过关</span>
+            <span id="passBadge" class="tag muted">巩固进度 · 4/5 题正确即过关</span>
             </div>
             <div id="variantList" class="variant-list"></div>
           </section>
@@ -884,6 +890,10 @@
                 <p class="section-subtitle">每道错题的拆解结果、巩固题进度与过关状态都会沉淀在这里，可随时回看继续训练。</p>
               </div>
               <button id="refreshLibraryBtn" class="ghost-btn" type="button">刷新</button>
+            </div>
+            <div class="library-filter-tabs" id="libraryFilterTabs">
+              <button class="ghost-btn active" type="button" data-library-filter="all">全部</button>
+              <button class="ghost-btn" type="button" data-library-filter="review">待复核</button>
             </div>
             <div id="libraryList" class="library-list"></div>
           </section>
@@ -907,6 +917,28 @@
                 <h3>结构化错因</h3>
                 <div id="errorCauses" class="rank-list"></div>
               </div>
+            </div>
+            <div id="parentWeeklyPanel" class="parent-weekly-panel hidden">
+              <div class="panel-head compact-head">
+                <div><h3>家长周报</h3><p class="section-subtitle">近 7 天错题消灭进度与高频错因</p></div>
+                <button id="refreshParentWeeklyBtn" class="ghost-btn" type="button">刷新</button>
+              </div>
+              <pre id="parentWeeklySummary" class="weekly-summary"></pre>
+              <div id="parentWeeklyPatterns" class="rank-list"></div>
+            </div>
+            <div id="teacherPortalPanel" class="teacher-portal-panel hidden">
+              <div class="panel-head compact-head">
+                <div><h3>教师工作台</h3><p class="section-subtitle">班级管理与待复核导出</p></div>
+                <button id="exportReviewQueueBtn" class="secondary-btn" type="button">导出待复核清单</button>
+              </div>
+              <form id="teacherClassForm" class="teacher-class-form">
+                <input id="teacherClassName" type="text" placeholder="班级名称" required />
+                <input id="teacherClassGrade" type="text" placeholder="年级（可选）" />
+                <textarea id="teacherClassStudents" placeholder="学生姓名，每行一个"></textarea>
+                <button class="primary-btn" type="submit">创建班级</button>
+              </form>
+              <div id="teacherClassList" class="teacher-class-list"></div>
+              <div id="teacherReviewPreview" class="teacher-review-preview"></div>
             </div>
           </section>
         </section>
@@ -1181,6 +1213,6 @@
     <div id="toast" class="toast hidden"></div>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-    <script defer src="/app.js?v=20260713textquality11"></script>
+    <script defer src="/app.js?v=20260716guided9"></script>
   </body>
 </html>

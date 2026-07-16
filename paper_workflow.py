@@ -41,7 +41,7 @@ def split_numbered_questions(text: str) -> list[dict]:
     source = (text or "").replace("\r\n", "\n").strip()
     if not source:
         return []
-    pattern = re.compile(r"(?m)^\s*(?:第\s*)?(\d{1,3})\s*(?:题|[\.、．)])\s*")
+    pattern = re.compile(r"(?m)^\s*(?:(?:第\s*)?(\d{1,3})\s*题|[（(]\s*(\d{1,3})\s*[）)]|(\d{1,3})\s*[\.、．])\s*")
     matches = list(pattern.finditer(source))
     if not matches:
         return [{"question_no": "1", "printed_text": source, "confidence": 0.55}]
@@ -50,7 +50,8 @@ def split_numbered_questions(text: str) -> list[dict]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
         body = source[match.end():end].strip()
         if body:
-            rows.append({"question_no": match.group(1), "printed_text": body, "confidence": 0.82})
+            number = next((group for group in match.groups() if group), str(index + 1))
+            rows.append({"question_no": number, "printed_text": body, "confidence": 0.82})
     return rows
 
 
@@ -93,4 +94,3 @@ def paper_summary(rows: list[dict]) -> dict:
         "score_rate": round(earned / possible * 100, 1) if possible else None,
         "wrong_count": sum(counts[x] for x in ("wrong", "partial", "blank", "review_required")),
     }
-

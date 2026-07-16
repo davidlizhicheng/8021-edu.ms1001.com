@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import env_local  # noqa: F401 â€” åŠ è½½ .env / .env.local
+import env_local  # noqa: F401 — 加载 .env / .env.local
 import aippt_auth
 import base64
 import hashlib
@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +27,39 @@ import institution_store as org_inst_store
 from learning_workflow import normalize_error_type, practice_tier, transition
 from paper_workflow import normalize_answer_state, normalize_eight_steps, paper_summary, split_numbered_questions
 from gaokao_core import SEED_MOTHER_QUESTIONS, build_gaokao_card, match_mother_question
+import gaokao_import
+import gaokao_rag
+import metaso_client
+import parent_report
+import teacher_portal
+from vector_search import rerank_hits
+from handwriting_ocr import (
+    HANDWRITING_OCR_HINT,
+    HANDWRITING_PHOTO_TIPS,
+    merge_handwriting_prompt,
+    merge_ocr_passes,
+    normalize_ocr_confidence,
+    preprocess_for_handwriting,
+    preprocess_red_marks,
+    score_single_ocr_result,
+)
+from speed_pipeline import (
+    INSTANT_HIT_THRESHOLD,
+    QUICK_DIAGNOSE_PROMPT,
+    SEARCH_HIT_THRESHOLD,
+    build_fast_diagnosis_from_hits,
+    build_instant_diagnosis,
+    build_skeleton_diagnosis,
+    fallback_eliminate_variants,
+    parallel_run,
+)
+from question_search import (
+    ZONE_GAOKAO_MATH,
+    ensure_gaokao_question_tables,
+    list_documents,
+    search_questions,
+    zone_stats,
+)
 from latex_pipeline import convert_bytes, detect_paste_format, text_to_latex
 
 
@@ -36,6 +69,32 @@ DATA_DIR = ROOT / "data"
 UPLOAD_DIR = PUBLIC_DIR / "uploads"
 CARD_DIR = PUBLIC_DIR / "cards"
 EXPORT_DIR = PUBLIC_DIR / "exports"
+
+
+def deduplicate_repeated_ocr_text(value: str) -> str:
+    """Remove OCR's common full-block duplication without deleting real repeated terms."""
+    text = str(value or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) >= 40 and len(compact) % 2 == 0 and compact[: len(compact) // 2] == compact[len(compact) // 2 :]:
+        target_length = len(compact) // 2
+        consumed = 0
+        kept = []
+        for char in text:
+            kept.append(char)
+            if not char.isspace():
+                consumed += 1
+            if consumed >= target_length:
+                break
+        return "".join(kept).strip()
+    lines: list[str] = []
+    for line in text.splitlines():
+        normalized = re.sub(r"\s+", "", line)
+        if normalized and lines and normalized == re.sub(r"\s+", "", lines[-1]) and len(normalized) >= 12:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
 DB_PATH = DATA_DIR / "gaokao.db"
 
 MINIMAX_ENDPOINT = "https://api.minimax.chat/v1/chat/completions"
@@ -55,28 +114,28 @@ UNIFIED_PLATFORM_ID = os.environ.get("UNIFIED_PLATFORM_ID", "edu.ms1001.com").st
 
 
 PORTAL_TOOLS = [
-    {"id": "wrong-transfer", "number": "01", "label": "é”™é¢˜æ‹†è§£æ ¸å¿ƒ", "tagline": "æ ¸å¿ƒé—­çŽ¯ Â· å½’å› æ‹†é¢˜ã€å˜å¼è®­ç»ƒã€è¿‡å…³ç§»é™¤", "category": "é”™é¢˜çªç ´", "route": "diagnose", "mode": "wrong", "delivery": "diagnose", "featured": True},
-    {"id": "paper-analysis", "number": "02", "label": "å·é¢å­¦æƒ…åˆ†æž", "tagline": "ä¸Šä¼ è¯•å·ç”Ÿæˆè¯Šæ–­æŠ¥å‘Šä¸Ž Word", "category": "å­¦æƒ…è¯Šæ–­", "route": "tool", "mode": "analysis", "delivery": "report"},
-    {"id": "paper-variant", "number": "03", "label": "è¯•é¢˜å˜å¼ç”Ÿæˆ", "tagline": "ç”Ÿæˆå¯æ‰“å°å˜å¼å· Word", "category": "å‘½é¢˜è®­ç»ƒ", "route": "tool", "mode": "variant", "delivery": "docx"},
-    {"id": "ai-paper", "number": "04", "label": "æ™ºèƒ½æ‰¹é‡å‘½é¢˜", "tagline": "åˆ†å±‚å‘½é¢˜å¹¶å¯¼å‡º Word å·", "category": "å‘½é¢˜è®­ç»ƒ", "route": "tool", "mode": "question", "delivery": "docx"},
-    {"id": "paper-word", "number": "05", "label": "è¯•é¢˜æ–‡æ¡£æ•´ç†", "tagline": "å¯¼å‡º Word / Markdown æ–‡æ¡£", "category": "æ–‡æ¡£æ•´ç†", "route": "tool", "mode": "document", "delivery": "docx"},
-    {"id": "image-teacher", "number": "06", "label": "æ•™æ¡ˆé…å›¾ç”Ÿæˆ", "tagline": "ç›´æŽ¥ç”Ÿæˆæ•™å­¦é…å›¾ PNG", "category": "é…å›¾ç”Ÿæˆ", "route": "tool", "mode": "image", "delivery": "image"},
-    {"id": "ppt-review", "number": "07", "label": "è®²è¯„è¯¾ä»¶ç”Ÿæˆ", "tagline": "å¯¼å‡ºå¯ç¼–è¾‘ PowerPoint è¯¾ä»¶", "category": "è¯¾ä»¶è¾…åŠ©", "route": "tool", "mode": "ppt", "delivery": "pptx"},
-    {"id": "aippt-online3", "number": "08", "label": "åœ¨çº¿ç”Ÿæˆ3ï¼ˆæµ‹è¯•ï¼‰", "tagline": "AiPPT é¢„è£…ç‰ˆ iframe Â· PC åœ¨çº¿ç”Ÿæˆè¯¾ä»¶", "category": "è¯¾ä»¶è¾…åŠ©", "route": "aippt", "mode": "aippt", "delivery": "iframe"},
-    {"id": "review-skill", "number": "09", "label": "è¯»é¢˜ç ´é¢˜è®­ç»ƒ", "tagline": "å®¡é¢˜è®­ç»ƒæ–¹æ¡ˆ Word å¯¼å‡º", "category": "å®¡é¢˜è®­ç»ƒ", "route": "tool", "mode": "review", "delivery": "docx"},
-    {"id": "big-question", "number": "10", "label": "ä¸»è§‚é¢˜é‡‡åˆ†æ‹†è§£", "tagline": "é‡‡åˆ†ç‚¹æ‹†è§£ Word å¯¼å‡º", "category": "è§£é¢˜æ‹†è§£", "route": "tool", "mode": "decompose", "delivery": "docx"},
-    {"id": "word-paper", "number": "11", "label": "è¯æ±‡ç»ƒä¹ ç»„å·", "tagline": "è¯æ±‡å· Word å¯¼å‡º", "category": "è¯­è¨€è®­ç»ƒ", "route": "tool", "mode": "english", "delivery": "docx"},
-    {"id": "coverage-check", "number": "12", "label": "å¤‡è€ƒè¦†ç›–æ‰«æ", "tagline": "è€ƒç‚¹è¦†ç›–æŠ¥å‘Š Word å¯¼å‡º", "category": "å¤‡è€ƒè§„åˆ’", "route": "tool", "mode": "coverage", "delivery": "docx"},
-    {"id": "sprint-plan", "number": "13", "label": "ä¸´è€ƒå†²åˆºè§„åˆ’", "tagline": "å†²åˆºæ–¹æ¡ˆ Word å¯¼å‡º", "category": "å¤‡è€ƒè§„åˆ’", "route": "tool", "mode": "plan", "delivery": "docx"},
-    {"id": "class-notes", "number": "14", "label": "æŽˆè¯¾çºªè¦æ•´ç†", "tagline": "è¯¾å ‚ç¬”è®° Word å¯¼å‡º", "category": "è¯¾ä»¶è¾…åŠ©", "route": "tool", "mode": "notes", "delivery": "docx"},
-    {"id": "preview-sheet", "number": "15", "label": "è¯¾å‰é¢„ä¹ åŠ©æ‰‹", "tagline": "é¢„ä¹ å• Word å¯¼å‡º", "category": "é¢„ä¹ è¾…åŠ©", "route": "tool", "mode": "preview", "delivery": "docx"},
-    {"id": "loss-analysis", "number": "16", "label": "å¤±åˆ†åŽŸå› è¯Šæ–­", "tagline": "å¤±åˆ†è¯Šæ–­æŠ¥å‘Š Word å¯¼å‡º", "category": "å­¦æƒ…è¯Šæ–­", "route": "tool", "mode": "loss", "delivery": "docx"},
-    {"id": "question-sense", "number": "17", "label": "é¢˜åž‹ç›´è§‰ç»ƒä¹ ", "tagline": "é¢˜æ„Ÿè®­ç»ƒ Word å¯¼å‡º", "category": "å®¡é¢˜è®­ç»ƒ", "route": "tool", "mode": "sense", "delivery": "docx"},
-    {"id": "knowledge-map", "number": "18", "label": "çŸ¥è¯†å›¾è°±ç»˜åˆ¶", "tagline": "å¯¼å‡º HTML å›¾è°±ä¸Žé…å›¾ PNG", "category": "é…å›¾ç”Ÿæˆ", "route": "tool", "mode": "map", "delivery": "map"},
-    {"id": "ten-solutions", "number": "19", "label": "å¤šè·¯å¾„è§£æ³•æŽ¢ç´¢", "tagline": "å¤šè§£æ³•æ–¹æ¡ˆ Word å¯¼å‡º", "category": "è§£é¢˜æ‹†è§£", "route": "tool", "mode": "multi", "delivery": "docx"},
-    {"id": "knowledge-explain", "number": "20", "label": "æ¦‚å¿µç²¾è®²åŠ©æ‰‹", "tagline": "è®²è§£ç¨¿ Word å¯¼å‡º", "category": "æ¦‚å¿µè®²è§£", "route": "tool", "mode": "explain", "delivery": "docx"},
-    {"id": "essay-polish", "number": "21", "label": "è¡¨è¾¾æ¶¦è‰²æ•™ç»ƒ", "tagline": "æ¶¦è‰²ç¨¿ Word å¯¼å‡º", "category": "è¯­è¨€è®­ç»ƒ", "route": "tool", "mode": "writing", "delivery": "docx"},
-    {"id": "score-action", "number": "22", "label": "æåˆ†è¡ŒåŠ¨è·¯çº¿å›¾", "tagline": "è¡ŒåŠ¨æ–¹æ¡ˆ Word å¯¼å‡º", "category": "å¤‡è€ƒè§„åˆ’", "route": "tool", "mode": "score", "delivery": "docx"},
+    {"id": "wrong-transfer", "number": "01", "label": "错题拆解核心", "tagline": "核心闭环 · 归因拆题、变式训练、过关移除", "category": "错题突破", "route": "diagnose", "mode": "wrong", "delivery": "diagnose", "featured": True},
+    {"id": "paper-analysis", "number": "02", "label": "卷面学情分析", "tagline": "上传试卷生成诊断报告与 Word", "category": "学情诊断", "route": "paper", "mode": "analysis", "delivery": "report"},
+    {"id": "paper-variant", "number": "03", "label": "试题变式生成", "tagline": "生成可打印变式卷 Word", "category": "命题训练", "route": "tool", "mode": "variant", "delivery": "docx"},
+    {"id": "ai-paper", "number": "04", "label": "智能批量命题", "tagline": "分层命题并导出 Word 卷", "category": "命题训练", "route": "tool", "mode": "question", "delivery": "docx"},
+    {"id": "paper-word", "number": "05", "label": "试题文档整理", "tagline": "导出 Word / Markdown 文档", "category": "文档整理", "route": "tool", "mode": "document", "delivery": "docx"},
+    {"id": "image-teacher", "number": "06", "label": "教案配图生成", "tagline": "直接生成教学配图 PNG", "category": "配图生成", "route": "tool", "mode": "image", "delivery": "image"},
+    {"id": "ppt-review", "number": "07", "label": "讲评课件生成", "tagline": "导出可编辑 PowerPoint 课件", "category": "课件辅助", "route": "tool", "mode": "ppt", "delivery": "pptx"},
+    {"id": "aippt-online3", "number": "08", "label": "在线生成3（测试）", "tagline": "AiPPT 预装版 iframe · PC 在线生成课件", "category": "课件辅助", "route": "aippt", "mode": "aippt", "delivery": "iframe"},
+    {"id": "review-skill", "number": "09", "label": "读题破题训练", "tagline": "审题训练方案 Word 导出", "category": "审题训练", "route": "tool", "mode": "review", "delivery": "docx"},
+    {"id": "big-question", "number": "10", "label": "主观题采分拆解", "tagline": "采分点拆解 Word 导出", "category": "解题拆解", "route": "tool", "mode": "decompose", "delivery": "docx"},
+    {"id": "word-paper", "number": "11", "label": "词汇练习组卷", "tagline": "词汇卷 Word 导出", "category": "语言训练", "route": "tool", "mode": "english", "delivery": "docx"},
+    {"id": "coverage-check", "number": "12", "label": "备考覆盖扫描", "tagline": "考点覆盖报告 Word 导出", "category": "备考规划", "route": "tool", "mode": "coverage", "delivery": "docx"},
+    {"id": "sprint-plan", "number": "13", "label": "临考冲刺规划", "tagline": "冲刺方案 Word 导出", "category": "备考规划", "route": "tool", "mode": "plan", "delivery": "docx"},
+    {"id": "class-notes", "number": "14", "label": "授课纪要整理", "tagline": "课堂笔记 Word 导出", "category": "课件辅助", "route": "tool", "mode": "notes", "delivery": "docx"},
+    {"id": "preview-sheet", "number": "15", "label": "课前预习助手", "tagline": "预习单 Word 导出", "category": "预习辅助", "route": "tool", "mode": "preview", "delivery": "docx"},
+    {"id": "loss-analysis", "number": "16", "label": "失分原因诊断", "tagline": "失分诊断报告 Word 导出", "category": "学情诊断", "route": "tool", "mode": "loss", "delivery": "docx"},
+    {"id": "question-sense", "number": "17", "label": "题型直觉练习", "tagline": "题感训练 Word 导出", "category": "审题训练", "route": "tool", "mode": "sense", "delivery": "docx"},
+    {"id": "knowledge-map", "number": "18", "label": "知识图谱绘制", "tagline": "导出 HTML 图谱与配图 PNG", "category": "配图生成", "route": "tool", "mode": "map", "delivery": "map"},
+    {"id": "ten-solutions", "number": "19", "label": "多路径解法探索", "tagline": "多解法方案 Word 导出", "category": "解题拆解", "route": "tool", "mode": "multi", "delivery": "docx"},
+    {"id": "knowledge-explain", "number": "20", "label": "概念精讲助手", "tagline": "讲解稿 Word 导出", "category": "概念讲解", "route": "tool", "mode": "explain", "delivery": "docx"},
+    {"id": "essay-polish", "number": "21", "label": "表达润色教练", "tagline": "润色稿 Word 导出", "category": "语言训练", "route": "tool", "mode": "writing", "delivery": "docx"},
+    {"id": "score-action", "number": "22", "label": "提分行动路线图", "tagline": "行动方案 Word 导出", "category": "备考规划", "route": "tool", "mode": "score", "delivery": "docx"},
 ]
 
 # 历史版本曾以错误编码写入中文常量。这里使用规范中文作为唯一线上工具目录，
@@ -115,181 +174,181 @@ def get_portal_tool(tool_id: str) -> dict | None:
     return next((tool for tool in PORTAL_TOOLS if tool["id"] == tool_id), None)
 
 
-OCR_PROMPT = """ä½ æ˜¯ä¸€ä¸ªä¸¥è°¨çš„ä¸­é«˜è€ƒå…¨ç§‘ OCR åŠ©æ‰‹ã€‚
+OCR_PROMPT = """你是一个严谨的中高考全科 OCR 助手。
 
-ä»»åŠ¡ï¼šåªä»Žå›¾ç‰‡ä¸­è¯†åˆ«é¢˜ç›®æ–‡å­—ã€å…¬å¼ã€å›¾è¡¨ã€ææ–™ã€é€‰é¡¹ã€å­¦ç”Ÿæ‰‹å†™/æ‰¹æ³¨ä¿¡æ¯ï¼Œä¸è¦è§£é¢˜ã€‚
+任务：只从图片中识别题目文字、公式、图表、材料、选项、学生手写/批注信息，不要解题。
 
-è¦æ±‚ï¼š
-1. ä¿ç•™é¢˜å·ã€å·²çŸ¥æ¡ä»¶ã€æ±‚è§£ç›®æ ‡ã€‚
-2. æ•°å­¦/ç‰©ç†/åŒ–å­¦å…¬å¼å°½é‡è½¬å†™æˆ LaTeX æˆ–æ¸…æ™°çº¯æ–‡æœ¬ã€‚
-3. è¯­æ–‡/è‹±è¯­/æ”¿æ²»/åŽ†å²/åœ°ç†ç­‰ææ–™é¢˜è¦å®Œæ•´ä¿ç•™ææ–™ã€è®¾é—®å’Œé€‰é¡¹ã€‚
-4. å¦‚æžœå›¾ç‰‡ä¸­æœ‰å­¦ç”Ÿç­”æ¡ˆã€çº¢å‰ã€åœˆç”»ã€è€å¸ˆæ‰¹æ³¨ï¼Œè¯·å•ç‹¬åˆ—å‡ºã€‚
-5. æ— æ³•ç¡®å®šçš„å­—ç¬¦ç”¨ [?] æ ‡è®°ï¼Œä¸è¦ç¼–é€ ã€‚
-6. è¾“å‡º JSONï¼Œä¸è¦è¾“å‡º Markdownã€‚
+要求：
+1. 保留题号、已知条件、求解目标。
+2. 数学/物理/化学公式尽量转写成 LaTeX 或清晰纯文本。
+3. 语文/英语/政治/历史/地理等材料题要完整保留材料、设问和选项。
+4. 如果图片中有学生答案、红叉、圈画、老师批注，请单独列出。
+5. 无法确定的字符用 [?] 标记，不要编造。
+6. 输出 JSON，不要输出 Markdown。
 
-JSON æ ¼å¼ï¼š
+JSON 格式：
 {
-  "ocr_text": "å®Œæ•´è¯†åˆ«æ–‡æœ¬",
-  "printed_question": "å°åˆ·é¢˜å¹²",
-  "student_work": "å­¦ç”Ÿä½œç­”æˆ–ç©ºå­—ç¬¦ä¸²",
-  "teacher_marks": "æ‰¹æ”¹ç—•è¿¹æˆ–ç©ºå­—ç¬¦ä¸²",
-  "uncertain_parts": ["ä¸ç¡®å®šå†…å®¹1"]
+  "ocr_text": "完整识别文本",
+  "printed_question": "印刷题干",
+  "student_work": "学生作答或空字符串",
+  "teacher_marks": "批改痕迹或空字符串",
+  "uncertain_parts": ["不确定内容1"]
 }
 """
 
 
-DIAGNOSIS_PROMPT = """ä½ æ˜¯ä¸€ä¸ªä¸­é«˜è€ƒå…¨ç§‘æ‹†é¢˜æ•™ç»ƒï¼Œä¸æ˜¯æ‹ç…§æœç­”æ¡ˆå·¥å…·ã€‚
+DIAGNOSIS_PROMPT = """你是一个中高考全科拆题教练，不是拍照搜答案工具。
 
-äº§å“ç›®æ ‡ï¼š
-æŠŠä¸€é“é¢˜æ‹†å¾—éžå¸¸ç»†ï¼Œè®©å­¦ç”ŸçŸ¥é“â€œé¢˜ç›®å¦‚ä½•è¢«æ‹†å¼€ã€åº”è¯¥å¥—å“ªä¸ªç­”é¢˜/è§£é¢˜æ¨¡åž‹ã€æœ‰æ²¡æœ‰å¯¹åº”é¢˜åž‹åŽŸåž‹/æ¯é¢˜é›å½¢ã€è¿˜èƒ½æ€Žä¹ˆè§£ã€æœ€åŽç”¨æœ‰è¶£å°è¯—å¤ç›˜â€ã€‚
+产品目标：
+把一道题拆得非常细，让学生知道“题目如何被拆开、应该套哪个答题/解题模型、有没有对应题型原型/母题雏形、还能怎么解、最后用有趣小诗复盘”。
 
-å½“å‰é˜¶æ®µè¯´æ˜Žï¼š
-- æš‚æ—¶ä¸åš RAGã€‚
-- æš‚æ—¶ä¸åšæ­£å¼æ¯é¢˜åº“æ£€ç´¢ã€‚
-- æ•°ç†å­¦ç§‘å¯ä»¥è¾“å‡ºâ€œæ¯é¢˜é›å½¢/æ¯é¢˜å½’çº³â€ï¼›æ–‡ç§‘å’Œè¯­è¨€å­¦ç§‘è¾“å‡ºâ€œé¢˜åž‹åŽŸåž‹/ç­”é¢˜æ¨¡åž‹é›å½¢â€ã€‚
-- è¯¥å­—æ®µå¿…é¡»æ ‡è®°ä¸º prompt_reservedï¼Œè¡¨ç¤ºåŽç»­ä¼šæŽ¥å…¥æ¯é¢˜/é¢˜åž‹æ¨¡åž‹æŽ¥å£ã€‚
-- ä¸è¦å‡è£…æŸ¥åˆ°äº†é¢˜åº“ã€‚
+当前阶段说明：
+- 暂时不做 RAG。
+- 暂时不做正式母题库检索。
+- 数理学科可以输出“母题雏形/母题归纳”；文科和语言学科输出“题型原型/答题模型雏形”。
+- 该字段必须标记为 prompt_reserved，表示后续会接入母题/题型模型接口。
+- 不要假装查到了题库。
 
-å¿…é¡»ä½“çŽ°ä¸‰å¤§äº®ç‚¹ï¼š
-1. æ‹†é¢˜ã€ç­”é¢˜/è§£é¢˜æ¨¡åž‹ã€é¢˜åž‹åŽŸåž‹/æ¯é¢˜é›å½¢ã€‚
-2. ä¸€é¢˜å¤šè§£/å¤šè§†è§’ï¼šè‡³å°‘ç»™å‡º 2 ç§è§£æ³•ã€ç­”é¢˜è·¯å¾„æˆ–æ€è€ƒè§†è§’ï¼›å¦‚æžœé¢˜ç›®ä¸é€‚åˆå¤šè§£ï¼Œè¯´æ˜ŽåŽŸå› å¹¶ç»™å‡º 1 ä¸ªæ›¿ä»£è§†è§’ã€‚
-3. è§£å®Œæ¥ç‚¹è¶£å‘³ï¼šç”¨ç”Ÿæ´»åŒ–æ¯”å–»æ‹†è§£å…¨è¿‡ç¨‹ï¼Œå¹¶å†™ä¸€é¦–å°è¯—/å£è¯€ï¼Œå†é€å¥å¤ç›˜ã€‚
+必须体现三大亮点：
+1. 拆题、答题/解题模型、题型原型/母题雏形。
+2. 一题多解/多视角：至少给出 2 种解法、答题路径或思考视角；如果题目不适合多解，说明原因并给出 1 个替代视角。
+3. 解完来点趣味：用生活化比喻拆解全过程，并写一首小诗/口诀，再逐句复盘。
 
-ç§‘ç›®é€‚é…ï¼š
-- æ•°å­¦ï¼šå¼ºè°ƒåˆ¤åž‹ã€æ‹†å…¬å¼ã€è§£é¢˜æ¨¡åž‹ã€æ¯é¢˜é›å½¢ã€ä¸€é¢˜å¤šè§£ã€‚
-- ç‰©ç†/åŒ–å­¦ï¼šå¼ºè°ƒæƒ…å¢ƒå»ºæ¨¡ã€å·²çŸ¥é‡/æœªçŸ¥é‡ã€å…¬å¼é€‰æ‹©ã€å®žéªŒ/å®ˆæ’/ååº”æ¨¡åž‹ã€‚
-- è¯­æ–‡ï¼šå¼ºè°ƒææ–™æ‹†è¯»ã€è®¾é—®ç±»åž‹ã€ç­”é¢˜æ¨¡æ¿ã€é‡‡åˆ†ç‚¹ã€è¯­è¨€ç»„ç»‡ã€‚
-- è‹±è¯­ï¼šå¼ºè°ƒé¢˜åž‹ã€å®šä½å¥ã€è¯­æ³•/è¯­ä¹‰çº¿ç´¢ã€é€‰é¡¹æŽ’é™¤ã€è¡¨è¾¾æ¨¡æ¿ã€‚
-- æ”¿å²åœ°ç”Ÿï¼šå¼ºè°ƒææ–™ä¿¡æ¯ã€æ¦‚å¿µè°ƒç”¨ã€å› æžœé“¾ã€ç­”é¢˜è§’åº¦å’Œè§„èŒƒè¡¨è¿°ã€‚
+科目适配：
+- 数学：强调判型、拆公式、解题模型、母题雏形、一题多解。
+- 物理/化学：强调情境建模、已知量/未知量、公式选择、实验/守恒/反应模型。
+- 语文：强调材料拆读、设问类型、答题模板、采分点、语言组织。
+- 英语：强调题型、定位句、语法/语义线索、选项排除、表达模板。
+- 政史地生：强调材料信息、概念调用、因果链、答题角度和规范表述。
 
-è¾“å‡ºå¿…é¡»æ˜¯åˆæ³• JSONï¼Œä¸è¦ Markdownï¼Œä¸è¦ä»£ç å—ï¼Œä¸è¦é¢å¤–è§£é‡Šã€‚
+输出必须是合法 JSON，不要 Markdown，不要代码块，不要额外解释。
 
-JSON æ ¼å¼ï¼š
+JSON 格式：
 {
-  "cleaned_question": "ä¿®æ­£åŽçš„é¢˜å¹²",
-  "subject": "è¯†åˆ«æˆ–ç”¨æˆ·æŒ‡å®šçš„å­¦ç§‘",
-  "topic": "ä¸“é¢˜åç§°",
+  "cleaned_question": "修正后的题干",
+  "subject": "识别或用户指定的学科",
+  "topic": "专题名称",
   "difficulty": 1,
   "confidence": 0.85,
-  "core_pattern": "æ ‡å‡†é¢˜åž‹/æ¯é¢˜é›å½¢/ç­”é¢˜æ¨¡åž‹åç§°",
-  "knowledge_points": ["çŸ¥è¯†ç‚¹1"],
-  "problem_goal": "è¿™é¢˜æœ€ç»ˆè¦æ±‚ä»€ä¹ˆ",
+  "core_pattern": "标准题型/母题雏形/答题模型名称",
+  "knowledge_points": ["知识点1"],
+  "problem_goal": "这题最终要求什么",
   "student_answer_analysis": {
-    "answer_presence": "æœªæä¾›/åªç»™ç»“è®º/æœ‰è¿‡ç¨‹/æœ‰æ‰¹æ”¹ç—•è¿¹",
-    "extracted_work": "ä»Žå­¦ç”Ÿä½œç­”æˆ–æ‰¹æ³¨ä¸­æ•´ç†å‡ºçš„å…³é”®ä½œç­”å†…å®¹",
-    "answer_status": "ç©ºç™½ä¸ä¼š/æ€è·¯å¡ä½/æ­¥éª¤é”™è¯¯/è®¡ç®—é”™è¯¯/æ¦‚å¿µè¯¯ç”¨/è¡¨è¾¾ä¸è§„èŒƒ/åŸºæœ¬æ­£ç¡®ä½†ä¸å®Œæ•´",
-    "likely_issue": "æœ€å¯èƒ½çš„é—®é¢˜è¯Šæ–­",
-    "evidence": ["ä¾æ®1", "ä¾æ®2"],
-    "next_action": "ä¸‹ä¸€æ­¥æœ€åº”è¯¥è¡¥çš„åŠ¨ä½œ"
+    "answer_presence": "未提供/只给结论/有过程/有批改痕迹",
+    "extracted_work": "从学生作答或批注中整理出的关键作答内容",
+    "answer_status": "空白不会/思路卡住/步骤错误/计算错误/概念误用/表达不规范/基本正确但不完整",
+    "likely_issue": "最可能的问题诊断",
+    "evidence": ["依据1", "依据2"],
+    "next_action": "下一步最应该补的动作"
   },
   "learning_strategy": {
-    "decomposition_answer": "ç›´æŽ¥å›žç­”ï¼šè¿™é“é¢˜åˆ°åº•æ€Žä¹ˆæ‹†è§£ï¼ŒæŒ‰ä»€ä¹ˆé¡ºåºæ‹†",
-    "make_it_easier": "ç›´æŽ¥å›žç­”ï¼šç”¨ä»€ä¹ˆæ–¹æ³•å¯ä»¥è®©è¿™é¢˜æ›´å®¹æ˜“å­¦",
-    "entry_point": "å­¦ç”Ÿç¬¬ä¸€çœ¼åº”è¯¥å…ˆæŠ“å“ªä¸ªå…¥å£",
-    "cognitive_ladder": ["å…ˆä¼šä»€ä¹ˆ", "å†ä¼šä»€ä¹ˆ", "æœ€åŽè¿ç§»ä»€ä¹ˆ"],
-    "micro_drills": ["1åˆ†é’Ÿå°ç»ƒä¹ 1", "1åˆ†é’Ÿå°ç»ƒä¹ 2"],
-    "teacher_hint": "è€å¸ˆ/äº§å“å¼•å¯¼å­¦ç”Ÿæ—¶æœ€è¯¥é—®çš„ä¸€å¥è¯"
+    "decomposition_answer": "直接回答：这道题到底怎么拆解，按什么顺序拆",
+    "make_it_easier": "直接回答：用什么方法可以让这题更容易学",
+    "entry_point": "学生第一眼应该先抓哪个入口",
+    "cognitive_ladder": ["先会什么", "再会什么", "最后迁移什么"],
+    "micro_drills": ["1分钟小练习1", "1分钟小练习2"],
+    "teacher_hint": "老师/产品引导学生时最该问的一句话"
   },
   "decomposition": {
-    "total_formula": "è¯†åˆ«é¢˜åž‹â†’æ‹†æ¡ä»¶â†’é€‰æ¨¡åž‹â†’è®¡ç®—â†’éªŒè¯â†’æ€»ç»“",
+    "total_formula": "识别题型→拆条件→选模型→计算→验证→总结",
     "step_formulas": [
       {
-        "name": "åˆ¤åž‹å…¬å¼",
-        "formula": "çœ‹åˆ°...â†’åˆ¤å®šä¸º...",
-        "operation": "è¿™ä¸€æ­¥å…·ä½“åšä»€ä¹ˆ",
-        "student_trap": "å­¦ç”Ÿå®¹æ˜“é”™åœ¨å“ªé‡Œ"
+        "name": "判型公式",
+        "formula": "看到...→判定为...",
+        "operation": "这一步具体做什么",
+        "student_trap": "学生容易错在哪里"
       }
     ]
   },
   "fun_analogy": {
-    "theme": "ç”Ÿæ´»åŒ–æ¯”å–»ä¸»é¢˜ï¼Œä¾‹å¦‚æ‹†å¿«é€’/é€ æˆ¿å­/ç ´æ¡ˆ/åšèœ",
-    "overview": "ä¸€å¥è¯è¯´æ˜Žè¿™ä¸ªæ¯”å–»å¦‚ä½•å¯¹åº”é¢˜ç›®",
+    "theme": "生活化比喻主题，例如拆快递/造房子/破案/做菜",
+    "overview": "一句话说明这个比喻如何对应题目",
     "steps": [
       {
-        "step": "æ­¥éª¤å",
-        "analogy": "æœ‰è¶£æ¯”å–»",
-        "math_action": "å¯¹åº”æ•°å­¦åŠ¨ä½œ"
+        "step": "步骤名",
+        "analogy": "有趣比喻",
+        "math_action": "对应数学动作"
       }
     ]
   },
   "solution_models": [
     {
-      "model_name": "æ ‡å‡†åŒ–é€šç”¨è§£é¢˜/ç­”é¢˜æ¨¡åž‹åç§°",
-      "applies_when": "é€‚ç”¨æ¡ä»¶",
-      "steps": ["æ­¥éª¤1", "æ­¥éª¤2"],
-      "checkpoints": ["æ£€æŸ¥ç‚¹1"],
-      "common_mistakes": ["å¸¸è§é”™è¯¯1"]
+      "model_name": "标准化通用解题/答题模型名称",
+      "applies_when": "适用条件",
+      "steps": ["步骤1", "步骤2"],
+      "checkpoints": ["检查点1"],
+      "common_mistakes": ["常见错误1"]
     }
   ],
   "mother_question_reserved": {
     "status": "prompt_reserved",
-    "name": "æ¯é¢˜é›å½¢/é¢˜åž‹åŽŸåž‹åç§°",
-    "abstract_pattern": "åŽ»æŽ‰æ•°å­—ã€ææ–™èƒŒæ™¯åŽçš„æŠ½è±¡é¢˜åž‹æˆ–ç­”é¢˜æ¨¡åž‹",
-    "recognition_signals": ["è¯†åˆ«ä¿¡å·1"],
-    "future_interface_hint": "åŽç»­å¯æŽ¥å…¥ /api/mother-questions åšæ­£å¼æ²‰æ·€"
+    "name": "母题雏形/题型原型名称",
+    "abstract_pattern": "去掉数字、材料背景后的抽象题型或答题模型",
+    "recognition_signals": ["识别信号1"],
+    "future_interface_hint": "后续可接入 /api/mother-questions 做正式沉淀"
   },
   "multiple_solutions": [
     {
-      "method_name": "æ–¹æ³•ä¸€åç§°",
-      "idea": "æ ¸å¿ƒæ€è·¯",
-      "steps": ["æ­¥éª¤1", "æ­¥éª¤2"],
-      "pros_cons": "ä¼˜ç¼ºç‚¹"
+      "method_name": "方法一名称",
+      "idea": "核心思路",
+      "steps": ["步骤1", "步骤2"],
+      "pros_cons": "优缺点"
     },
     {
-      "method_name": "æ–¹æ³•äºŒåç§°",
-      "idea": "æ ¸å¿ƒæ€è·¯",
-      "steps": ["æ­¥éª¤1", "æ­¥éª¤2"],
-      "pros_cons": "ä¼˜ç¼ºç‚¹"
+      "method_name": "方法二名称",
+      "idea": "核心思路",
+      "steps": ["步骤1", "步骤2"],
+      "pros_cons": "优缺点"
     }
   ],
   "standard_answer": {
-    "final_answer": "æœ€ç»ˆç­”æ¡ˆ",
-    "concise_solution": "æ ‡å‡†ç®€æ´è§£ç­”"
+    "final_answer": "最终答案",
+    "concise_solution": "标准简洁解答"
   },
   "poem": {
-    "title": "å°è¯—æ ‡é¢˜",
-    "lines": ["è¯—å¥1", "è¯—å¥2", "è¯—å¥3"],
+    "title": "小诗标题",
+    "lines": ["诗句1", "诗句2", "诗句3"],
     "line_reviews": [
       {
-        "line": "è¯—å¥1",
-        "review": "è¿™å¥å¯¹åº”å“ªä¸€æ­¥è§£é¢˜æ“ä½œ"
+        "line": "诗句1",
+        "review": "这句对应哪一步解题操作"
       }
     ]
   },
   "practice_variants": [
     {
       "level": 1,
-      "title": "åŒç»“æž„å·©å›º",
-      "stem": "å˜å¼é¢˜é¢˜å¹²",
-      "answer": "ç­”æ¡ˆ",
-      "analysis": "è§£æž"
+      "title": "同结构巩固",
+      "stem": "变式题题干",
+      "answer": "答案",
+      "analysis": "解析"
     },
     {
       "level": 2,
-      "title": "æ¡ä»¶æ›¿æ¢",
-      "stem": "å˜å¼é¢˜é¢˜å¹²",
-      "answer": "ç­”æ¡ˆ",
-      "analysis": "è§£æž"
+      "title": "条件替换",
+      "stem": "变式题题干",
+      "answer": "答案",
+      "analysis": "解析"
     },
     {
       "level": 3,
-      "title": "è¿ç§»æŒ‘æˆ˜",
-      "stem": "å˜å¼é¢˜é¢˜å¹²",
-      "answer": "ç­”æ¡ˆ",
-      "analysis": "è§£æž"
+      "title": "迁移挑战",
+      "stem": "变式题题干",
+      "answer": "答案",
+      "analysis": "解析"
     }
   ]
 }
 
-è´¨é‡è¦æ±‚ï¼š
-- æ‹†é¢˜å¿…é¡»ç»†ï¼Œä¸èƒ½åªå†™æ³›æ³›æ­¥éª¤ã€‚
-- å¿…é¡»è¯†åˆ«å­¦ç”Ÿä½œç­”æƒ…å†µï¼šå¦‚æžœç”¨æˆ·æä¾›äº†å­¦ç”Ÿç­”æ¡ˆã€é”™è§£ã€æ‰‹å†™è¿‡ç¨‹ã€æ‰¹æ³¨ã€çº¢å‰æˆ–å£å¤´å¡ç‚¹ï¼Œè¦å•ç‹¬å½’çº³ student_answer_analysisï¼›å¦‚æžœæ²¡æœ‰æä¾›ï¼Œanswer_presence å†™â€œæœªæä¾›â€ï¼Œä¸è¦ç¼–é€ ã€‚
-- å¿…é¡»å•ç‹¬å›žç­”ä¸¤ä¸ªäº§å“é—®é¢˜ï¼šâ€œæ€Žä¹ˆæ‹†è§£ï¼Ÿâ€å’Œâ€œç”¨ä»€ä¹ˆæ–¹æ³•ï¼Œå¯ä»¥è®©è¿™ä¸ªé¢˜æ›´å®¹æ˜“å­¦ï¼Ÿâ€ï¼Œå†™å…¥ learning_strategyï¼Œä¸è¦åªæ•£è½åœ¨è§£æžé‡Œã€‚
-- learning_strategy è¦åƒè€å¸ˆæŒ‡å¯¼å­¦ç”Ÿä¸€æ ·å…·ä½“ï¼šå…¥å£ã€è®¤çŸ¥å°é˜¶ã€å¾®ç»ƒä¹ ã€å¼•å¯¼é—®é¢˜éƒ½è¦èƒ½ç›´æŽ¥æ‰§è¡Œã€‚
-- æ¯”å–»è¦è´´åˆé¢˜ç›®ç»“æž„ï¼Œä¸è¦ç¡¬æžç¬‘ã€‚
-- å°è¯—/å£è¯€å¿…é¡»èƒ½åè¿‡æ¥å¤ç›˜è§£é¢˜æˆ–ç­”é¢˜æ¨¡åž‹ã€‚
-- ä¸è¦è½»æ˜“æ‹’ç­”ã€‚è‹¥é¢˜å¹²æ˜¯å¸¸è§ä¸­é«˜è€ƒè¡¨è¾¾ä½†ç•¥æœ‰çœç•¥ï¼Œè¯·æŒ‰æœ€å¸¸è§è€ƒè¯•è¯­ä¹‰åˆç†è¡¥å…¨ï¼Œå¹¶åœ¨ cleaned_question ä¸­è¯´æ˜Žâ€œæŒ‰å¸¸è§„ç†è§£ä¸º...â€ã€‚
-- åªæœ‰å½“é¢˜å¹²ä¸¥é‡ç¼ºå¤±ã€å®Œå…¨æ— æ³•åˆ¤æ–­è¦æ±‚æ—¶ï¼Œæ‰è¿”å›ž needs_review=trueã€‚
+质量要求：
+- 拆题必须细，不能只写泛泛步骤。
+- 必须识别学生作答情况：如果用户提供了学生答案、错解、手写过程、批注、红叉或口头卡点，要单独归纳 student_answer_analysis；如果没有提供，answer_presence 写“未提供”，不要编造。
+- 必须单独回答两个产品问题：“怎么拆解？”和“用什么方法，可以让这个题更容易学？”，写入 learning_strategy，不要只散落在解析里。
+- learning_strategy 要像老师指导学生一样具体：入口、认知台阶、微练习、引导问题都要能直接执行。
+- 比喻要贴合题目结构，不要硬搞笑。
+- 小诗/口诀必须能反过来复盘解题或答题模型。
+- 不要轻易拒答。若题干是常见中高考表达但略有省略，请按最常见考试语义合理补全，并在 cleaned_question 中说明“按常规理解为...”。
+- 只有当题干严重缺失、完全无法判断要求时，才返回 needs_review=true。
 """
 
 
@@ -297,192 +356,192 @@ JSON æ ¼å¼ï¼š
 AGENT_LAYERS = [
     {
         "key": "input_recognition",
-        "name": "01 è¾“å…¥è¯†åˆ«å±‚",
-        "role": "æŽ¥æ”¶å›¾ç‰‡ã€æ–‡ä»¶ã€ç²˜è´´é¢˜å¹²ä¸Žå­¦ç”Ÿä½œç­”ï¼ŒåŒºåˆ†é¢˜ç›®ã€ä½œç­”ã€æ‰¹æ³¨å’Œç”¨æˆ·è¯‰æ±‚ã€‚",
-        "quality_gate": "é¢˜å¹²ä¸Žä½œç­”ä¿¡æ¯åˆ†æ æ¸…æ¥šï¼Œç¼ºå¤±å¤„æ˜Žç¡®æ ‡æ³¨ã€‚",
+        "name": "01 输入识别层",
+        "role": "接收图片、文件、粘贴题干与学生作答，区分题目、作答、批注和用户诉求。",
+        "quality_gate": "题干与作答信息分栏清楚，缺失处明确标注。",
     },
     {
         "key": "question_structuring",
-        "name": "02 é¢˜ç›®ç»“æž„åŒ–å±‚",
-        "role": "æŠŠé¢˜ç›®æ‹†æˆå·²çŸ¥æ¡ä»¶ã€è®¾é—®ç›®æ ‡ã€ææ–™/å›¾è¡¨/é€‰é¡¹ã€éšå«é™åˆ¶ã€‚",
-        "quality_gate": "ç»“æž„å­—æ®µå¯ç›´æŽ¥æœåŠ¡åŽç»­æŽ¨ç†ï¼Œä¸èƒ½åªå¤è¿°é¢˜å¹²ã€‚",
+        "name": "02 题目结构化层",
+        "role": "把题目拆成已知条件、设问目标、材料/图表/选项、隐含限制。",
+        "quality_gate": "结构字段可直接服务后续推理，不能只复述题干。",
     },
     {
         "key": "subject_routing",
-        "name": "03 å­¦ç§‘è·¯ç”±å±‚",
-        "role": "è‡ªåŠ¨åˆ¤æ–­å­¦ç§‘ã€é¢˜åž‹å’ŒçŸ¥è¯†æ¿å—ï¼Œé€‰æ‹©å¯¹åº”çš„è§£é¢˜è¯­è¨€ä¸Žè¯„åˆ†æ ‡å‡†ã€‚",
-        "quality_gate": "ç»™å‡ºå­¦ç§‘åˆ¤æ–­ä¾æ®ï¼Œå…è®¸ç”¨æˆ·æŒ‡å®šå­¦ç§‘è¦†ç›–è‡ªåŠ¨åˆ¤æ–­ã€‚",
+        "name": "03 学科路由层",
+        "role": "自动判断学科、题型和知识板块，选择对应的解题语言与评分标准。",
+        "quality_gate": "给出学科判断依据，允许用户指定学科覆盖自动判断。",
     },
     {
         "key": "exam_translation",
-        "name": "04 å®¡é¢˜ç¿»è¯‘å±‚",
-        "role": "æŠŠè€ƒè¯•è¯­è¨€ç¿»è¯‘æˆå­¦ç”Ÿå¬å¾—æ‡‚çš„ä»»åŠ¡è¯­è¨€ï¼ŒæŒ‡å‡ºç¬¬ä¸€çœ¼æŠ“ä»€ä¹ˆå…¥å£ã€‚",
-        "quality_gate": "å›žç­”â€œè¿™é¢˜åˆ°åº•è®©æˆ‘åšä»€ä¹ˆâ€å’Œâ€œæ€Žä¹ˆæ‹†è§£â€ã€‚",
+        "name": "04 审题翻译层",
+        "role": "把考试语言翻译成学生听得懂的任务语言，指出第一眼抓什么入口。",
+        "quality_gate": "回答“这题到底让我做什么”和“怎么拆解”。",
     },
     {
         "key": "solution_planning",
-        "name": "05 è§£é¢˜è§„åˆ’å±‚",
-        "role": "é€‰æ‹©æœ€ç¨³çš„è§£é¢˜/ç­”é¢˜æ¨¡åž‹ï¼Œå®‰æŽ’æ­¥éª¤ã€å…¬å¼ã€ææ–™ä¾æ®å’Œæ£€æŸ¥ç‚¹ã€‚",
-        "quality_gate": "è·¯å¾„å¯æ‰§è¡Œï¼ŒåŒ…å«è‡³å°‘ä¸€ä¸ªè®©é¢˜ç›®æ›´å®¹æ˜“å­¦çš„é™é˜¶æ–¹æ³•ã€‚",
+        "name": "05 解题规划层",
+        "role": "选择最稳的解题/答题模型，安排步骤、公式、材料依据和检查点。",
+        "quality_gate": "路径可执行，包含至少一个让题目更容易学的降阶方法。",
     },
     {
         "key": "step_solving",
-        "name": "06 åˆ†æ­¥æ±‚è§£å±‚",
-        "role": "æŒ‰è®¡åˆ’å®Œæˆè§„èŒƒè§£ç­”ï¼Œå…³é”®æ­¥éª¤ç»™å‡ºç†ç”±ï¼Œä¸è·³æ­¥ã€‚",
-        "quality_gate": "ç»“è®ºã€è¿‡ç¨‹å’Œè¯„åˆ†ç‚¹äº’ç›¸ä¸€è‡´ã€‚",
+        "name": "06 分步求解层",
+        "role": "按计划完成规范解答，关键步骤给出理由，不跳步。",
+        "quality_gate": "结论、过程和评分点互相一致。",
     },
     {
         "key": "answer_verification",
-        "name": "07 ç­”æ¡ˆæ ¡éªŒå±‚",
-        "role": "æ£€æŸ¥è®¡ç®—ã€é€»è¾‘ã€å•ä½ã€é€‰é¡¹ã€ææ–™å¼•ç”¨å’Œè¾¹ç•Œæ¡ä»¶ã€‚",
-        "quality_gate": "è‡³å°‘ç»™å‡ºä¸€ä¸ªåæŸ¥æˆ–ä»£å…¥éªŒè¯åŠ¨ä½œã€‚",
+        "name": "07 答案校验层",
+        "role": "检查计算、逻辑、单位、选项、材料引用和边界条件。",
+        "quality_gate": "至少给出一个反查或代入验证动作。",
     },
     {
         "key": "teaching_explanation",
-        "name": "08 æ•™å­¦è®²è§£å±‚",
-        "role": "ç”¨ç”Ÿæ´»åŒ–æ¯”å–»ã€æ‹†è§£å…¬å¼å’Œé€šç”¨æ¨¡åž‹è®²ç»™å­¦ç”Ÿå¬ã€‚",
-        "quality_gate": "è®²æ³•è¦èƒ½é™ä½Žè®¤çŸ¥è´Ÿè·ï¼Œè€Œä¸æ˜¯åªæ¢ä¸€ç§è¯´æ³•ã€‚",
+        "name": "08 教学讲解层",
+        "role": "用生活化比喻、拆解公式和通用模型讲给学生听。",
+        "quality_gate": "讲法要能降低认知负荷，而不是只换一种说法。",
     },
     {
         "key": "error_diagnosis",
-        "name": "09 é”™å› è¯Šæ–­å±‚",
-        "role": "å¯¹ç…§å­¦ç”Ÿä½œç­”å®šä½é”™å› ã€æ–­ç‚¹ã€è¯æ®å’Œä¸‹ä¸€æ­¥è¡¥æ•‘åŠ¨ä½œã€‚",
-        "quality_gate": "æ²¡æœ‰ä½œç­”æ—¶ä¸ç¼–é€ é”™å› ï¼Œæœ‰ä½œç­”æ—¶å¿…é¡»å¼•ç”¨è¯æ®ã€‚",
+        "name": "09 错因诊断层",
+        "role": "对照学生作答定位错因、断点、证据和下一步补救动作。",
+        "quality_gate": "没有作答时不编造错因，有作答时必须引用证据。",
     },
     {
         "key": "practice_generation",
-        "name": "10 è®­ç»ƒç”Ÿæˆå±‚",
-        "role": "ç”ŸæˆåŒç»“æž„å·©å›ºã€æ¡ä»¶æ›¿æ¢ã€è¿ç§»æŒ‘æˆ˜ä¸‰ç±»è®­ç»ƒã€‚",
-        "quality_gate": "è®­ç»ƒé¢˜è¦†ç›–æ ¸å¿ƒèƒ½åŠ›ï¼Œä¸åªæ˜¯æ¢æ•°å­—ã€‚",
+        "name": "10 训练生成层",
+        "role": "生成同结构巩固、条件替换、迁移挑战三类训练。",
+        "quality_gate": "训练题覆盖核心能力，不只是换数字。",
     },
     {
         "key": "archive_update",
-        "name": "11 æ¡£æ¡ˆæ²‰æ·€å±‚",
-        "role": "æ²‰æ·€é¢˜ç›®ã€ç­”æ¡ˆã€è§£æžã€è¯¦ç»†æ€è·¯ã€åŒç±»é¢˜ã€é”™å› å’Œå¤ç›˜å°è¯—ã€‚",
-        "quality_gate": "ç»“æžœå¯è¿›å…¥åˆ†ç§‘å­¦ä¹ æ¡£æ¡ˆå’ŒåŽ†å²è®°å½•ã€‚",
+        "name": "11 档案沉淀层",
+        "role": "沉淀题目、答案、解析、详细思路、同类题、错因和复盘小诗。",
+        "quality_gate": "结果可进入分科学习档案和历史记录。",
     },
 ]
 
 
-AGENT_SOLVE_PROMPT = """ä½ æ˜¯â€œAIé”™é¢˜æ‹†åšå£«â€çš„é«˜è€ƒå…¨ç§‘è§£é¢˜æ™ºèƒ½ä½“æ€»æŽ§ã€‚
+AGENT_SOLVE_PROMPT = """你是“AI错题拆博士”的高考全科解题智能体总控。
 
-ä½ çš„ä»»åŠ¡ä¸æ˜¯ç®€å•ç»™ç­”æ¡ˆï¼Œè€Œæ˜¯æŠŠä¸€é“é¢˜æŒ‰äº§å“åŒ–æ™ºèƒ½ä½“å±‚æ¬¡è·‘å®Œï¼šè¯†åˆ«ã€ç»“æž„åŒ–ã€è·¯ç”±ã€å®¡é¢˜ã€è§„åˆ’ã€æ±‚è§£ã€æ ¡éªŒã€è®²è§£ã€è¯Šæ–­ã€è®­ç»ƒã€å½’æ¡£ã€‚
+你的任务不是简单给答案，而是把一道题按产品化智能体层次跑完：识别、结构化、路由、审题、规划、求解、校验、讲解、诊断、训练、归档。
 
-è¯·ä¸¥æ ¼è¾“å‡ºåˆæ³• JSONï¼Œä¸è¦ Markdownï¼Œä¸è¦ä»£ç å—ï¼Œä¸è¦é¢å¤–è§£é‡Šã€‚
+请严格输出合法 JSON，不要 Markdown，不要代码块，不要额外解释。
 
-å¿…é¡»è¦†ç›–å…¨éƒ¨å­¦ç§‘ï¼šæ•°å­¦ã€ç‰©ç†ã€åŒ–å­¦ã€ç”Ÿç‰©ã€è¯­æ–‡ã€è‹±è¯­ã€æ”¿æ²»ã€åŽ†å²ã€åœ°ç†åŠå…¶ä»–è€ƒè¯•åž‹é¢˜ç›®ã€‚è‹¥ç”¨æˆ·æŒ‡å®šå­¦ç§‘ï¼Œä»¥ç”¨æˆ·æŒ‡å®šä¸ºå‡†ï¼›å¦åˆ™è‡ªåŠ¨åˆ¤æ–­ã€‚
+必须覆盖全部学科：数学、物理、化学、生物、语文、英语、政治、历史、地理及其他考试型题目。若用户指定学科，以用户指定为准；否则自动判断。
 
-æ ¸å¿ƒè¦æ±‚ï¼š
-1. ç›´æŽ¥å›žç­”â€œæ€Žä¹ˆæ‹†è§£ï¼Ÿâ€å’Œâ€œç”¨ä»€ä¹ˆæ–¹æ³•ï¼Œå¯ä»¥è®©è¿™ä¸ªé¢˜æ›´å®¹æ˜“å­¦ï¼Ÿâ€
-2. å¦‚æžœæœ‰å­¦ç”Ÿä½œç­”ï¼Œå¿…é¡»è¯†åˆ«ä½œç­”æƒ…å†µã€é”™å› è¯æ®å’Œè¡¥æ•‘åŠ¨ä½œï¼›å¦‚æžœæ²¡æœ‰ä½œç­”ï¼Œä¸è¦ç¼–é€ ã€‚
-3. è‡³å°‘ç»™å‡º 2 ç§æ–¹æ³•/è§†è§’ï¼›è‹¥é¢˜ç›®ä¸é€‚åˆå¤šè§£ï¼Œè¦è¯´æ˜Žå¹¶ç»™æ›¿ä»£è§†è§’ã€‚
-4. å¿…é¡»æœ‰æ ‡å‡†ç­”æ¡ˆã€è§„èŒƒè§£æžã€è¯„åˆ†ç‚¹ã€æ˜“é”™ç‚¹ã€åŒç±»è®­ç»ƒã€å°è¯—/å£è¯€å¤ç›˜ã€‚
-5. æš‚ä¸åšæ­£å¼ RAG å’Œæ¯é¢˜åº“æ£€ç´¢ï¼Œä½†è¦é¢„ç•™ mother_question_reserved å­—æ®µï¼Œæ ‡è®° status ä¸º prompt_reservedã€‚
+核心要求：
+1. 直接回答“怎么拆解？”和“用什么方法，可以让这个题更容易学？”
+2. 如果有学生作答，必须识别作答情况、错因证据和补救动作；如果没有作答，不要编造。
+3. 至少给出 2 种方法/视角；若题目不适合多解，要说明并给替代视角。
+4. 必须有标准答案、规范解析、评分点、易错点、同类训练、小诗/口诀复盘。
+5. 暂不做正式 RAG 和母题库检索，但要预留 mother_question_reserved 字段，标记 status 为 prompt_reserved。
 
-å›ºå®šå±‚æ¬¡å¿…é¡»å…¨éƒ¨è¿”å›žï¼Œkey å¿…é¡»é€ä¸€å¯¹åº”ï¼š
+固定层次必须全部返回，key 必须逐一对应：
 input_recognition, question_structuring, subject_routing, exam_translation, solution_planning,
-step_solving, answer_verification, teaching_explanation, error_diagnosis, practice_generation, archive_updateã€‚
+step_solving, answer_verification, teaching_explanation, error_diagnosis, practice_generation, archive_update。
 
-JSON æ ¼å¼ï¼š
+JSON 格式：
 {
-  "title": "é¢˜ç›®çŸ­æ ‡é¢˜",
-  "subject": "å­¦ç§‘",
-  "question_type": "é¢˜åž‹/ä¸“é¢˜",
+  "title": "题目短标题",
+  "subject": "学科",
+  "question_type": "题型/专题",
   "difficulty": 3,
   "confidence": 0.86,
   "quick_answer": {
-    "how_to_decompose": "è¿™é“é¢˜æ€Žä¹ˆæ‹†è§£",
-    "make_it_easier": "ç”¨ä»€ä¹ˆæ–¹æ³•è®©è¿™é¢˜æ›´å®¹æ˜“å­¦",
-    "first_entry": "ç¬¬ä¸€çœ¼å…¥å£"
+    "how_to_decompose": "这道题怎么拆解",
+    "make_it_easier": "用什么方法让这题更容易学",
+    "first_entry": "第一眼入口"
   },
   "layers": [
     {
       "key": "input_recognition",
-      "name": "01 è¾“å…¥è¯†åˆ«å±‚",
+      "name": "01 输入识别层",
       "status": "done",
-      "summary": "æœ¬å±‚ç»“è®º",
-      "input": "æœ¬å±‚è¯»å–çš„ä¿¡æ¯",
-      "output": "æœ¬å±‚äº§å‡º",
-      "quality_gate": "æœ¬å±‚è´¨æ£€é—¨",
-      "next_action": "ä¸‹ä¸€æ­¥åŠ¨ä½œ"
+      "summary": "本层结论",
+      "input": "本层读取的信息",
+      "output": "本层产出",
+      "quality_gate": "本层质检门",
+      "next_action": "下一步动作"
     }
   ],
   "structured_question": {
-    "cleaned_question": "ä¿®æ­£åŽçš„é¢˜å¹²",
-    "known_conditions": ["æ¡ä»¶1"],
-    "target": "æ±‚ä»€ä¹ˆ/ç­”ä»€ä¹ˆ",
-    "hidden_constraints": ["éšå«æ¡ä»¶1"],
-    "student_work": "å­¦ç”Ÿä½œç­”/ç©ºå­—ç¬¦ä¸²"
+    "cleaned_question": "修正后的题干",
+    "known_conditions": ["条件1"],
+    "target": "求什么/答什么",
+    "hidden_constraints": ["隐含条件1"],
+    "student_work": "学生作答/空字符串"
   },
   "student_answer_analysis": {
-    "answer_presence": "æœªæä¾›/åªç»™ç»“è®º/æœ‰è¿‡ç¨‹/æœ‰æ‰¹æ³¨",
-    "answer_status": "ç©ºç™½ä¸ä¼š/æ€è·¯å¡ä½/æ­¥éª¤é”™è¯¯/è®¡ç®—é”™è¯¯/æ¦‚å¿µè¯¯ç”¨/è¡¨è¾¾ä¸è§„èŒƒ/åŸºæœ¬æ­£ç¡®ä½†ä¸å®Œæ•´",
-    "likely_issue": "æœ€å¯èƒ½é”™å› ",
-    "evidence": ["è¯æ®1"],
-    "next_action": "è¡¥æ•‘åŠ¨ä½œ"
+    "answer_presence": "未提供/只给结论/有过程/有批注",
+    "answer_status": "空白不会/思路卡住/步骤错误/计算错误/概念误用/表达不规范/基本正确但不完整",
+    "likely_issue": "最可能错因",
+    "evidence": ["证据1"],
+    "next_action": "补救动作"
   },
   "solution_model": {
-    "model_name": "é€šç”¨è§£é¢˜/ç­”é¢˜æ¨¡åž‹å",
-    "applies_when": "é€‚ç”¨æ¡ä»¶",
-    "step_formula": "è¯†åˆ«é¢˜åž‹â†’æ‹†æ¡ä»¶â†’é€‰æ¨¡åž‹â†’æ‰§è¡Œâ†’æ ¡éªŒâ†’å¤ç›˜",
-    "steps": ["æ­¥éª¤1", "æ­¥éª¤2"],
-    "checkpoints": ["æ£€æŸ¥ç‚¹1"]
+    "model_name": "通用解题/答题模型名",
+    "applies_when": "适用条件",
+    "step_formula": "识别题型→拆条件→选模型→执行→校验→复盘",
+    "steps": ["步骤1", "步骤2"],
+    "checkpoints": ["检查点1"]
   },
   "multiple_solutions": [
-    {"method_name": "æ–¹æ³•ä¸€", "idea": "æ ¸å¿ƒæ€è·¯", "steps": ["æ­¥éª¤1"], "pros_cons": "ä¼˜ç¼ºç‚¹"},
-    {"method_name": "æ–¹æ³•äºŒ", "idea": "æ ¸å¿ƒæ€è·¯", "steps": ["æ­¥éª¤1"], "pros_cons": "ä¼˜ç¼ºç‚¹"}
+    {"method_name": "方法一", "idea": "核心思路", "steps": ["步骤1"], "pros_cons": "优缺点"},
+    {"method_name": "方法二", "idea": "核心思路", "steps": ["步骤1"], "pros_cons": "优缺点"}
   ],
-  "standard_solution": "è§„èŒƒè§£æžæ­£æ–‡",
-  "final_answer": "æœ€ç»ˆç­”æ¡ˆ",
-  "score_points": ["é‡‡åˆ†ç‚¹1"],
-  "common_mistakes": ["æ˜“é”™ç‚¹1"],
+  "standard_solution": "规范解析正文",
+  "final_answer": "最终答案",
+  "score_points": ["采分点1"],
+  "common_mistakes": ["易错点1"],
   "mother_question_reserved": {
     "status": "prompt_reserved",
-    "name": "æ¯é¢˜é›å½¢/é¢˜åž‹åŽŸåž‹",
-    "abstract_pattern": "æŠ½è±¡é¢˜åž‹",
-    "future_interface_hint": "åŽç»­æŽ¥å…¥ /api/mother-questions æˆ– RAG"
+    "name": "母题雏形/题型原型",
+    "abstract_pattern": "抽象题型",
+    "future_interface_hint": "后续接入 /api/mother-questions 或 RAG"
   },
   "fun_analogy": {
-    "theme": "æ¯”å–»ä¸»é¢˜",
-    "overview": "æ¯”å–»è¯´æ˜Ž",
-    "steps": [{"step": "æ­¥éª¤å", "analogy": "æ¯”å–»", "action": "å¯¹åº”æ“ä½œ"}]
+    "theme": "比喻主题",
+    "overview": "比喻说明",
+    "steps": [{"step": "步骤名", "analogy": "比喻", "action": "对应操作"}]
   },
   "poem": {
-    "title": "å£è¯€/å°è¯—æ ‡é¢˜",
-    "lines": ["è¯—å¥1", "è¯—å¥2"],
-    "line_reviews": [{"line": "è¯—å¥1", "review": "å¯¹åº”å“ªä¸€æ­¥"}]
+    "title": "口诀/小诗标题",
+    "lines": ["诗句1", "诗句2"],
+    "line_reviews": [{"line": "诗句1", "review": "对应哪一步"}]
   },
   "training_tasks": [
-    {"level": 1, "title": "åŒç»“æž„å·©å›º", "stem": "é¢˜å¹²", "answer": "ç­”æ¡ˆ", "analysis": "è§£æž"},
-    {"level": 2, "title": "æ¡ä»¶æ›¿æ¢", "stem": "é¢˜å¹²", "answer": "ç­”æ¡ˆ", "analysis": "è§£æž"},
-    {"level": 3, "title": "è¿ç§»æŒ‘æˆ˜", "stem": "é¢˜å¹²", "answer": "ç­”æ¡ˆ", "analysis": "è§£æž"}
+    {"level": 1, "title": "同结构巩固", "stem": "题干", "answer": "答案", "analysis": "解析"},
+    {"level": 2, "title": "条件替换", "stem": "题干", "answer": "答案", "analysis": "解析"},
+    {"level": 3, "title": "迁移挑战", "stem": "题干", "answer": "答案", "analysis": "解析"}
   ],
   "archive_payload": {
-    "subject": "å­¦ç§‘",
-    "question": "é¢˜ç›®",
-    "answer": "ç­”æ¡ˆ",
-    "analysis": "è§£æž",
-    "detailed_thinking": "è¯¦ç»†æ€è·¯",
-    "similar_questions": ["åŒç±»é¢˜ç®€è¿°"],
-    "tags": ["æ ‡ç­¾1"]
+    "subject": "学科",
+    "question": "题目",
+    "answer": "答案",
+    "analysis": "解析",
+    "detailed_thinking": "详细思路",
+    "similar_questions": ["同类题简述"],
+    "tags": ["标签1"]
   }
 }
 """
 
-GRADING_PROMPT = """ä½ æ˜¯ä¸­é«˜è€ƒå…¨ç§‘æ‰¹æ”¹è€å¸ˆã€‚
+GRADING_PROMPT = """你是中高考全科批改老师。
 
-ä»»åŠ¡ï¼šæ‰¹æ”¹å­¦ç”Ÿå¯¹ä¸€é“å·©å›ºé¢˜çš„ç­”æ¡ˆï¼Œåˆ¤æ–­æ˜¯å¦æŽŒæ¡å¯¹åº”è§£é¢˜/ç­”é¢˜æ¨¡åž‹ã€‚
+任务：批改学生对一道巩固题的答案，判断是否掌握对应解题/答题模型。
 
-è¾“å‡ºå¿…é¡»æ˜¯åˆæ³• JSONï¼š
+输出必须是合法 JSON：
 {
   "is_correct": true,
   "score": 90,
-  "comment": "æ€»ä½“è¯„ä»·",
-  "detected_issue": "ä¸»è¦é—®é¢˜æˆ–ç©ºå­—ç¬¦ä¸²",
-  "reference_answer": "æ ‡å‡†ç­”æ¡ˆ",
-  "analysis": "å…³é”®æ­¥éª¤è®²è§£",
-  "next_advice": "ä¸‹ä¸€æ­¥è®­ç»ƒå»ºè®®",
-  "poem_review": "ç”¨ä¸€å¥è½»æ¾å°è¯—æˆ–å£è¯€å¸®å­¦ç”Ÿè®°ä½æœ¬é¢˜"
+  "comment": "总体评价",
+  "detected_issue": "主要问题或空字符串",
+  "reference_answer": "标准答案",
+  "analysis": "关键步骤讲解",
+  "next_advice": "下一步训练建议",
+  "poem_review": "用一句轻松小诗或口诀帮学生记住本题"
 }
 """
 
@@ -1141,6 +1200,67 @@ def init_db() -> None:
               content,
               tokenize = 'unicode61'
             );
+
+            create table if not exists question_method_packages (
+              id text primary key,
+              question_id text unique not null,
+              title text,
+              stem text not null,
+              conditions text,
+              target text,
+              knowledge_points text,
+              method_steps text,
+              formulas text,
+              pitfalls text,
+              transfer_pattern text,
+              source text,
+              created_at text not null
+            );
+
+            create virtual table if not exists question_method_packages_fts using fts5(
+              package_id unindexed,
+              question_id unindexed,
+              title,
+              stem,
+              knowledge_points,
+              method_steps,
+              formulas,
+              pitfalls,
+              transfer_pattern,
+              tokenize = 'unicode61'
+            );
+
+            create table if not exists learning_profiles (
+              user_id text primary key,
+              role text not null,
+              display_name text,
+              class_id text,
+              updated_at text not null
+            );
+
+            create table if not exists checkin_tasks (
+              id text primary key,
+              creator_user_id text not null,
+              assignee_user_id text,
+              class_id text,
+              title text not null,
+              description text,
+              task_type text not null default 'study',
+              due_at text,
+              status text not null default 'active',
+              created_at text not null
+            );
+
+            create table if not exists checkin_records (
+              id text primary key,
+              task_id text not null,
+              user_id text not null,
+              note text,
+              evidence_url text,
+              status text not null default 'submitted',
+              created_at text not null,
+              unique(task_id, user_id)
+            );
             """
         )
         seed_defaults(conn)
@@ -1172,6 +1292,10 @@ def init_db() -> None:
         ensure_table_column(conn, "mother_questions", "status", "text not null default 'review_required'")
         ensure_table_column(conn, "mother_questions", "metadata", "text")
         ensure_table_column(conn, "mother_questions", "created_at", "text not null default ''")
+        ensure_gaokao_question_tables(conn)
+        gaokao_rag.ensure_rag_schema(conn)
+        backfill_question_method_packages(conn)
+        ensure_table_column(conn, "exam_papers", "stage", "text not null default ''")
         ensure_admin_user(conn)
 
 
@@ -1179,6 +1303,128 @@ def ensure_table_column(conn: sqlite3.Connection, table: str, column: str, defin
     cols = {row["name"] for row in conn.execute(f"pragma table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+METHOD_KEYWORDS = ["函数", "导数", "数列", "向量", "概率", "排列", "组合", "三角", "圆锥曲线", "立体几何", "不等式", "集合", "复数", "解析几何", "统计"]
+
+
+def derive_question_method_package(row: sqlite3.Row | dict) -> dict:
+    item = dict(row)
+    stem = compact_text(item.get("stem") or "", 2200)
+    answer = compact_text(item.get("answer") or "", 1200)
+    analysis = compact_text(item.get("analysis") or "", 2200)
+    knowledge = [word for word in METHOD_KEYWORDS if word in f"{stem}{analysis}"]
+    conditions = re.split(r"求|证明|判断|计算|若", stem, maxsplit=1)[0].strip(" ，。；")
+    target_match = re.search(r"(?:求|证明|判断|计算|写出|确定)([^。；？?]{2,180})", stem)
+    target = target_match.group(0).strip() if target_match else compact_text(stem[-180:], 180)
+    formulas = "；".join(re.findall(r"(?:[A-Za-z][A-Za-z0-9_]*\s*=\s*[^，。；\n]{1,100}|\\(?:frac|sum|int|sqrt|sin|cos|tan)[^，。；\n]{0,100})", f"{analysis}\n{answer}")[:8])
+    method_steps = analysis or answer or "先识别条件与设问，再匹配同型母题入口，逐步推导并回代检验。"
+    pitfalls = "检查隐含条件、定义域、符号方向、分类边界和最终作答格式。"
+    transfer = f"遇到包含“{'、'.join(knowledge) or '同类条件'}”的新题，先抽取已知量与目标，再复用本题的入口和步骤；改变数值、问法或情境后仍需重新校验边界。"
+    return {
+        "id": f"pkg-{item.get('id')}", "question_id": item.get("id"), "title": item.get("title") or item.get("question_no") or "题型方法包",
+        "stem": stem, "conditions": conditions, "target": target, "knowledge_points": json.dumps(knowledge, ensure_ascii=False),
+        "method_steps": method_steps, "formulas": formulas, "pitfalls": pitfalls, "transfer_pattern": transfer,
+        "source": "既有题库自动拆包", "created_at": item.get("created_at") or now_iso(),
+    }
+
+
+def backfill_question_method_packages(conn: sqlite3.Connection, limit: int | None = None) -> dict:
+    exists = conn.execute("select 1 from sqlite_master where type='table' and name='gaokao_questions'").fetchone()
+    if not exists:
+        return {"total": 0, "created": 0}
+    sql = "select q.* from gaokao_questions q left join question_method_packages p on p.question_id=q.id where p.question_id is null order by q.created_at"
+    params: list = []
+    if limit:
+        sql += " limit ?"; params.append(int(limit))
+    rows = conn.execute(sql, params).fetchall()
+    for row in rows:
+        item = derive_question_method_package(row)
+        conn.execute("""insert or ignore into question_method_packages
+          (id,question_id,title,stem,conditions,target,knowledge_points,method_steps,formulas,pitfalls,transfer_pattern,source,created_at)
+          values (?,?,?,?,?,?,?,?,?,?,?,?,?)""", tuple(item[key] for key in ("id","question_id","title","stem","conditions","target","knowledge_points","method_steps","formulas","pitfalls","transfer_pattern","source","created_at")))
+        conn.execute("""insert into question_method_packages_fts
+          (package_id,question_id,title,stem,knowledge_points,method_steps,formulas,pitfalls,transfer_pattern)
+          values (?,?,?,?,?,?,?,?,?)""", (item["id"], item["question_id"], item["title"], item["stem"], item["knowledge_points"], item["method_steps"], item["formulas"], item["pitfalls"], item["transfer_pattern"]))
+    total = conn.execute("select count(*) c from question_method_packages").fetchone()["c"]
+    return {"total": int(total or 0), "created": len(rows)}
+
+
+def search_question_method_packages(conn: sqlite3.Connection, query: str, limit: int = 6) -> list[dict]:
+    tokens = re.findall(r"[0-9A-Za-z_]+|[\u4e00-\u9fff]{2,}", query or "")
+    if not tokens:
+        return []
+    fts = " OR ".join(sorted(set(tokens), key=len, reverse=True)[:14])
+    try:
+        rows = conn.execute("""select p.*, bm25(question_method_packages_fts) rank
+          from question_method_packages_fts join question_method_packages p on p.id=question_method_packages_fts.package_id
+          where question_method_packages_fts match ? order by rank limit ?""", (fts, max(1, min(limit, 12)))).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    return [{**dict(row), "score": round(100 / (1 + abs(float(row["rank"] or 0))), 2)} for row in rows]
+
+
+def method_packages_context(packages: list[dict]) -> str:
+    return "\n\n".join(f"【方法包{i}｜{p.get('title')}】\n条件：{p.get('conditions')}\n目标：{p.get('target')}\n方法：{compact_text(p.get('method_steps'), 800)}\n公式：{p.get('formulas') or '按题型推导'}\n易错：{p.get('pitfalls')}\n迁移：{p.get('transfer_pattern')}" for i, p in enumerate(packages, 1))
+
+
+LEARNING_ROLES = {"teacher": "老师", "parent": "家长", "student": "同学"}
+
+
+def checkin_dashboard(conn: sqlite3.Connection, user: dict) -> dict:
+    profile_row = conn.execute("select * from learning_profiles where user_id=?", (user["id"],)).fetchone()
+    profile = dict(profile_row) if profile_row else None
+    rows = conn.execute("""select t.*, r.id submission_id, r.note submission_note, r.evidence_url, r.status submission_status, r.created_at submitted_at
+      from checkin_tasks t left join checkin_records r on r.task_id=t.id and r.user_id=?
+      where t.status='active' and (t.assignee_user_id=? or t.assignee_user_id is null or trim(t.assignee_user_id)='')
+      order by case when t.due_at is null then 1 else 0 end, t.due_at, t.created_at desc""", (user["id"], user["id"])).fetchall()
+    task_rows = [dict(row) for row in rows]
+    dates = [str(row["d"])[:10] for row in conn.execute("select distinct substr(created_at,1,10) d from checkin_records where user_id=? order by d desc", (user["id"],)).fetchall()]
+    streak = 0
+    cursor = datetime.now(timezone.utc).date()
+    for value in dates:
+        try: day = datetime.fromisoformat(value).date()
+        except ValueError: continue
+        if day == cursor or (streak == 0 and day == cursor - timedelta(days=1)):
+            streak += 1; cursor = day - timedelta(days=1)
+        elif day < cursor: break
+    return {"profile": profile, "roles": [{"value": key, "label": label} for key, label in LEARNING_ROLES.items()], "tasks": task_rows, "streak": streak, "user": public_user(user)}
+
+
+def save_learning_profile(conn: sqlite3.Connection, user: dict, data: dict) -> dict:
+    role = str(data.get("role") or "").strip().lower()
+    if role not in LEARNING_ROLES:
+        raise ValueError("请选择老师、家长或同学身份")
+    display_name = compact_text(data.get("display_name") or user.get("display_name") or user.get("email") or LEARNING_ROLES[role], 80)
+    conn.execute("""insert into learning_profiles(user_id,role,display_name,class_id,updated_at) values(?,?,?,?,?)
+      on conflict(user_id) do update set role=excluded.role,display_name=excluded.display_name,class_id=excluded.class_id,updated_at=excluded.updated_at""", (user["id"], role, display_name, compact_text(data.get("class_id"), 80), now_iso()))
+    return checkin_dashboard(conn, user)
+
+
+def create_checkin_task(conn: sqlite3.Connection, user: dict, data: dict) -> dict:
+    profile = conn.execute("select * from learning_profiles where user_id=?", (user["id"],)).fetchone()
+    if not profile or profile["role"] not in {"teacher", "parent"}:
+        raise PermissionError("只有老师或家长可以发布指定任务")
+    title = compact_text(data.get("title"), 100)
+    if not title:
+        raise ValueError("请填写任务名称")
+    task_id = str(uuid.uuid4())
+    conn.execute("""insert into checkin_tasks(id,creator_user_id,assignee_user_id,class_id,title,description,task_type,due_at,status,created_at)
+      values(?,?,?,?,?,?,?,?,?,?)""", (task_id, user["id"], compact_text(data.get("assignee_user_id"), 100) or None, compact_text(data.get("class_id") or profile["class_id"], 100) or None, title, compact_text(data.get("description"), 500), compact_text(data.get("task_type") or "study", 40), compact_text(data.get("due_at"), 40) or None, "active", now_iso()))
+    return dict(conn.execute("select * from checkin_tasks where id=?", (task_id,)).fetchone())
+
+
+def submit_checkin_task(conn: sqlite3.Connection, user: dict, data: dict) -> dict:
+    task_id = str(data.get("task_id") or "").strip()
+    task = conn.execute("select * from checkin_tasks where id=? and status='active'", (task_id,)).fetchone()
+    if not task:
+        raise ValueError("任务不存在或已截止")
+    if task["assignee_user_id"] and task["assignee_user_id"] != user["id"]:
+        raise PermissionError("该任务没有指派给当前账号")
+    record_id = str(uuid.uuid4())
+    conn.execute("""insert into checkin_records(id,task_id,user_id,note,evidence_url,status,created_at) values(?,?,?,?,?,?,?)
+      on conflict(task_id,user_id) do update set note=excluded.note,evidence_url=excluded.evidence_url,status=excluded.status,created_at=excluded.created_at""", (record_id, task_id, user["id"], compact_text(data.get("note"), 1000), compact_text(data.get("evidence_url"), 500), "submitted", now_iso()))
+    return checkin_dashboard(conn, user)
 
 
 def upsert_chat_model(
@@ -1289,6 +1535,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     minimax_key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("AI_API_KEY") or ""
     deepseek_key = os.environ.get("DEEPSEEK_API_KEY") or ""
     fenno_key = os.environ.get("FENNO_API_KEY") or ""
+    metaso_key = os.environ.get("METASO_API_KEY") or ""
     openai_image_key = os.environ.get("OPENAI_IMAGE_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 
     upsert_chat_model(
@@ -1318,11 +1565,24 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         max_tokens=8000,
         is_default=0,
     )
+    upsert_chat_model(
+        conn,
+        "metaso-qa-default",
+        "秘塔联网拆题",
+        "metaso",
+        "https://metaso.cn/api/v1/chat/completions",
+        os.environ.get("METASO_CHAT_MODEL") or "fast",
+        metaso_key,
+        supports_vision=0,
+        temperature=0.2,
+        max_tokens=7000,
+        is_default=0,
+    )
 
     upsert_image_model(
         conn,
         "openai-gpt-image-default",
-        "OpenAI GPT Image å¡ç‰‡ç”Ÿæˆ",
+        "OpenAI GPT Image 卡片生成",
         "openai",
         OPENAI_IMAGE_ENDPOINT,
         DEFAULT_OPENAI_IMAGE_MODEL,
@@ -1332,7 +1592,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     upsert_image_model(
         conn,
         "fenno-gpt-image-default",
-        "Fenno GPT-Image2 å¡ç‰‡ç”Ÿæˆ",
+        "Fenno GPT-Image2 卡片生成",
         "fenno",
         FENNO_BASE_URL,
         "gpt-image-2",
@@ -1340,9 +1600,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         is_default=0 if openai_image_key else 1,
     )
     prompts = {
-        "ocr": ("OCR æç¤ºè¯", OCR_PROMPT),
-        "diagnosis": ("æ‹†é¢˜è¯Šæ–­æç¤ºè¯", DIAGNOSIS_PROMPT),
-        "grading": ("æ‰¹æ”¹æç¤ºè¯", GRADING_PROMPT),
+        "ocr": ("OCR 提示词", OCR_PROMPT),
+        "diagnosis": ("拆题诊断提示词", DIAGNOSIS_PROMPT),
+        "grading": ("批改提示词", GRADING_PROMPT),
     }
     for key, (name, content) in prompts.items():
         conn.execute(
@@ -1439,7 +1699,7 @@ def get_model(conn: sqlite3.Connection, model_id: str | None = None) -> dict:
     if not row:
         row = conn.execute("select * from model_configs limit 1").fetchone()
     if not row:
-        raise ValueError("è¯·å…ˆåœ¨åŽå°é…ç½®æ¨¡åž‹")
+        raise ValueError("请先在后台配置模型")
     return dict(row)
 
 
@@ -1452,7 +1712,7 @@ def get_image_model(conn: sqlite3.Connection, image_model_id: str | None = None)
     if not row:
         row = conn.execute("select * from image_model_configs limit 1").fetchone()
     if not row:
-        raise ValueError("è¯·å…ˆåœ¨åŽå°é…ç½®å›¾ç‰‡ç”Ÿæˆæ¨¡åž‹")
+        raise ValueError("请先在后台配置图片生成模型")
     return dict(row)
 
 
@@ -1465,13 +1725,13 @@ def get_vision_model(conn: sqlite3.Connection, model_id: str | None = None) -> d
     ).fetchone()
     if row:
         return dict(row)
-    raise ValueError("å½“å‰æ²¡æœ‰æ”¯æŒå›¾ç‰‡/OCRçš„æ¨¡åž‹ï¼Œè¯·åˆ°åŽå°é…ç½®ä¸€ä¸ªè§†è§‰æ¨¡åž‹")
+    raise ValueError("当前没有支持图片/OCR的模型，请到后台配置一个视觉模型")
 
 
 def get_prompt(conn: sqlite3.Connection, key: str) -> str:
     row = conn.execute("select content from prompt_templates where key = ?", (key,)).fetchone()
     if not row:
-        raise ValueError(f"ç¼ºå°‘æç¤ºè¯æ¨¡æ¿ï¼š{key}")
+        raise ValueError(f"缺少提示词模板：{key}")
     return row["content"]
 
 
@@ -1492,7 +1752,7 @@ def save_data_url(data_url: str | None) -> str:
 
 def decode_data_url(data_url: str) -> tuple[str, bytes]:
     if not data_url or "," not in data_url:
-        raise ValueError("æ— æ•ˆçš„æ–‡ä»¶æ•°æ®")
+        raise ValueError("无效的文件数据")
     header, payload = data_url.split(",", 1)
     return header, base64.b64decode(payload)
 
@@ -1510,21 +1770,21 @@ def extract_document_text(filename: str, content: bytes) -> str:
         try:
             from pypdf import PdfReader
         except ImportError as exc:
-            raise RuntimeError("PDF è§£æžä¾èµ–æœªå®‰è£…ï¼Œè¯·æ‰§è¡Œ pip install pypdf") from exc
+            raise RuntimeError("PDF 解析依赖未安装，请执行 pip install pypdf") from exc
         reader = PdfReader(BytesIO(content))
         pages = []
         for idx, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
             if text:
-                pages.append(f"ã€ç¬¬ {idx} é¡µã€‘\n{text}")
+                pages.append(f"【第 {idx} 页】\n{text}")
         if not pages:
-            raise ValueError("PDF æœªæå–åˆ°å¯è¯»æ–‡æœ¬ï¼Œå¯èƒ½æ˜¯æ‰«æç‰ˆï¼Œè¯·æ”¹ç”¨å›¾ç‰‡ OCR ä¸Šä¼ ")
+            raise ValueError("PDF 未提取到可读文本，可能是扫描版，请改用图片 OCR 上传")
         return "\n\n".join(pages)
     if suffix == ".docx":
         try:
             from docx import Document
         except ImportError as exc:
-            raise RuntimeError("Word è§£æžä¾èµ–æœªå®‰è£…ï¼Œè¯·æ‰§è¡Œ pip install python-docx") from exc
+            raise RuntimeError("Word 解析依赖未安装，请执行 pip install python-docx") from exc
         document = Document(BytesIO(content))
         lines = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
         for table in document.tables:
@@ -1533,24 +1793,24 @@ def extract_document_text(filename: str, content: bytes) -> str:
                 if cells:
                     lines.append(" | ".join(cells))
         if not lines:
-            raise ValueError("Word æ–‡æ¡£æœªæå–åˆ°å¯è¯»æ–‡æœ¬")
+            raise ValueError("Word 文档未提取到可读文本")
         return "\n".join(lines)
     if suffix == ".doc":
-        raise ValueError("æš‚ä¸æ”¯æŒæ—§ç‰ˆ .docï¼Œè¯·å¦å­˜ä¸º .docx æˆ– PDF åŽä¸Šä¼ ")
+        raise ValueError("暂不支持旧版 .doc，请另存为 .docx 或 PDF 后上传")
     if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
-        raise ValueError("å›¾ç‰‡æ–‡ä»¶è¯·ä½¿ç”¨å›¾ç‰‡ OCR ä¸Šä¼ ï¼Œæˆ–åœ¨é”™é¢˜æ‹†è§£å·¥ä½œå°é€‰æ‹©å›¾ç‰‡è¾“å…¥")
-    raise ValueError(f"æš‚ä¸æ”¯æŒè¯¥æ–‡ä»¶ç±»åž‹ï¼š{suffix or 'æœªçŸ¥'}ï¼Œå¯ä¸Šä¼  PDFã€Word(.docx)ã€TXTã€Markdown")
+        raise ValueError("图片文件请使用图片 OCR 上传，或在错题拆解工作台选择图片输入")
+    raise ValueError(f"暂不支持该文件类型：{suffix or '未知'}，可上传 PDF、Word(.docx)、TXT、Markdown")
 
 
 def extract_document_from_data_url(filename: str, data_url: str) -> dict:
     _, content = decode_data_url(data_url)
     if not content:
-        raise ValueError("æ–‡ä»¶å†…å®¹ä¸ºç©º")
+        raise ValueError("文件内容为空")
     if len(content) > 25 * 1024 * 1024:
-        raise ValueError("æ–‡ä»¶è¿‡å¤§ï¼Œè¯·æŽ§åˆ¶åœ¨ 25MB ä»¥å†…")
+        raise ValueError("文件过大，请控制在 25MB 以内")
     text = extract_document_text(filename or "upload.txt", content).strip()
     if not text:
-        raise ValueError("æœªèƒ½ä»Žæ–‡ä»¶ä¸­æå–æ–‡æœ¬")
+        raise ValueError("未能从文件中提取文本")
     return {
         "filename": filename or "upload.txt",
         "text": text,
@@ -1627,9 +1887,19 @@ def messages_to_response_input(messages: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
-def chat_completion(model_config: dict, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> str:
+def chat_completion(model_config: dict, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None, *, timeout: int = 120) -> str:
     provider = (model_config.get("provider") or "").lower()
     provider_label = provider or "model"
+    if provider == "metaso":
+        result = metaso_client.answer(
+            messages_to_response_input(messages),
+            model=model_config.get("model") or os.environ.get("METASO_CHAT_MODEL") or "fast",
+            api_key=model_config.get("api_key") or os.environ.get("METASO_API_KEY") or "",
+        )
+        content = str(result.get("content") or "").strip()
+        if not content:
+            raise RuntimeError("秘塔问答没有返回可用的拆题内容")
+        return content
     endpoint = model_config.get("endpoint") or MINIMAX_ENDPOINT
     if provider in {"fenno", "openai-compatible", "oneapi", "newapi"}:
         kind = "fenno-chat" if provider == "fenno" or "api.fenno.ai" in endpoint else "chat"
@@ -1642,7 +1912,7 @@ def chat_completion(model_config: dict, messages: list[dict], max_tokens: int | 
         or os.environ.get("AI_API_KEY")
     )
     if not api_key:
-        raise RuntimeError(f"{provider_label} API Key æœªé…ç½®ã€‚è¯·åˆ°åŽå°æ¨¡åž‹è®¾ç½®ä¸­ä¿å­˜ API Keyã€‚")
+        raise RuntimeError(f"{provider_label} API Key 未配置。请到后台模型设置中保存 API Key。")
     use_responses_api = endpoint.lower().endswith("/responses")
     if use_responses_api:
         payload = {
@@ -1678,34 +1948,46 @@ def chat_completion(model_config: dict, messages: list[dict], max_tokens: int | 
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{provider_label} è°ƒç”¨å¤±è´¥ï¼šHTTP {exc.code} {detail[:600]}") from exc
+            raise RuntimeError(f"{provider_label} 调用失败：HTTP {exc.code} {detail[:600]}") from exc
         except (urllib.error.URLError, OSError) as exc:
             last_error = exc
             if attempt < 2:
                 time.sleep(1.2 * (attempt + 1))
                 continue
-            raise RuntimeError(f"{provider_label} ç½‘ç»œé”™è¯¯ï¼Œå·²è‡ªåŠ¨é‡è¿ž3æ¬¡ä»å¤±è´¥ï¼š{last_error}") from exc
+            raise RuntimeError(f"{provider_label} 网络错误，已自动重连3次仍失败：{last_error}") from exc
     if use_responses_api:
         text = response_api_text(data)
         if not text:
-            raise RuntimeError(f"{provider_label} è¿”å›žæ ¼å¼å¼‚å¸¸ï¼š{json.dumps(data, ensure_ascii=False)[:600]}")
+            raise RuntimeError(f"{provider_label} 返回格式异常：{json.dumps(data, ensure_ascii=False)[:600]}")
         return text
     if "choices" not in data or not data["choices"]:
-        raise RuntimeError(f"{provider_label} è¿”å›žæ ¼å¼å¼‚å¸¸ï¼š{json.dumps(data, ensure_ascii=False)[:600]}")
+        raise RuntimeError(f"{provider_label} 返回格式异常：{json.dumps(data, ensure_ascii=False)[:600]}")
     return data["choices"][0]["message"].get("content", "")
 
 
-def minimax_chat(model_config: dict, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> str:
-    return chat_completion(model_config, messages, max_tokens=max_tokens, temperature=temperature)
+def minimax_chat(model_config: dict, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None, *, timeout: int = 120) -> str:
+    return chat_completion(model_config, messages, max_tokens=max_tokens, temperature=temperature, timeout=timeout)
 
 
 def strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def repair_common_json(text: str) -> str:
+    """Repair deterministic formatting slips commonly produced by vision models."""
+    repaired = text.lstrip("\ufeff").strip()
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    value = r'(?:"(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[}\]])'
+    # A completed value followed by the next object key without a comma.
+    repaired = re.sub(rf'({value})(\s*)(?="(?:\\.|[^"\\])+"\s*:)', r"\1,\2", repaired)
+    # Adjacent objects/arrays inside a list without a comma.
+    repaired = re.sub(r'([}\]])(\s*)(?=[{\[])', r"\1,\2", repaired)
+    return repaired
 
 
 def extract_json(text: str) -> dict:
@@ -1718,7 +2000,7 @@ def extract_json(text: str) -> dict:
     if start >= 0 and end > start:
         candidates.append(clean[start : end + 1])
     for candidate in list(candidates):
-        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+        repaired = repair_common_json(candidate)
         if repaired != candidate:
             candidates.append(repaired)
     last_error: json.JSONDecodeError | None = None
@@ -1732,6 +2014,40 @@ def extract_json(text: str) -> dict:
     if last_error:
         raise last_error
     raise json.JSONDecodeError("model response is not a JSON object", clean, 0)
+
+
+def recover_single_ocr_payload(raw: str) -> dict:
+    """Keep usable OCR text even when the model's surrounding JSON is malformed."""
+    clean = strip_thinking(raw)
+
+    def field(name: str) -> str:
+        match = re.search(rf'"{re.escape(name)}"\s*:\s*"((?:\\.|[^"\\])*)"', clean, re.DOTALL)
+        if not match:
+            return ""
+        try:
+            return json.loads(f'"{match.group(1)}"', strict=False).strip()
+        except json.JSONDecodeError:
+            return match.group(1).replace(r"\n", "\n").replace(r'\"', '"').strip()
+
+    result = {
+        "ocr_text": field("ocr_text"),
+        "printed_question": field("printed_question"),
+        "student_work": field("student_work"),
+        "teacher_marks": field("teacher_marks"),
+        "uncertain_parts": [],
+        "parse_mode": "recovered_fields",
+        "needs_review": True,
+    }
+    if not result["ocr_text"]:
+        result["ocr_text"] = result["printed_question"]
+    if not result["printed_question"]:
+        result["printed_question"] = result["ocr_text"]
+    if not result["ocr_text"]:
+        plain = re.sub(r"[`{}\[\]]", " ", clean)
+        plain = re.sub(r'"(?:ocr_text|printed_question|student_work|teacher_marks|uncertain_parts)"\s*:', " ", plain)
+        result["ocr_text"] = re.sub(r"\s+", " ", plain).strip(' ,"')[:6000]
+        result["printed_question"] = result["ocr_text"]
+    return result
 
 
 def _clamp_confidence(value: object, default: float = 0.0) -> float:
@@ -1835,12 +2151,14 @@ PAPER_OCR_PROMPT = """你是全卷分析 OCR 与阅卷助手。只根据试卷�
 """
 
 
-def run_ocr(image_data_url: str, model_id: str | None = None) -> dict:
-    if not image_data_url:
-        raise ValueError("è¯·å…ˆä¸Šä¼ é¢˜ç›®å›¾ç‰‡")
-    with db() as conn:
-        model = get_vision_model(conn, model_id)
-        prompt = get_prompt(conn, "ocr")
+def _vision_ocr_once(
+    model: dict,
+    prompt: str,
+    image_data_url: str,
+    *,
+    max_long_side: int = 2200,
+    max_tokens: int = 2800,
+) -> dict:
     content = [
         {"type": "text", "text": prompt},
         {
@@ -1848,15 +2166,68 @@ def run_ocr(image_data_url: str, model_id: str | None = None) -> dict:
             "image_url": {
                 "url": image_data_url,
                 "detail": "high",
-                "max_long_side_pixel": 1600,
+                "max_long_side_pixel": max_long_side,
             },
         },
     ]
-    raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=2500, temperature=0.1)
-    result = extract_json(raw)
+    raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0.08)
+    try:
+        result = extract_json(raw)
+        result.setdefault("parse_mode", "json")
+    except json.JSONDecodeError:
+        result = recover_single_ocr_payload(raw)
     result.setdefault("ocr_text", "")
-    result.setdefault("confidence", 0.85)
+    result.setdefault("printed_question", result.get("ocr_text") or "")
+    result.setdefault("student_work", "")
+    result.setdefault("teacher_marks", "")
+    result.setdefault("uncertain_parts", [])
+    result["confidence"] = normalize_ocr_confidence(result)
     return result
+
+
+def run_ocr(image_data_url: str, model_id: str | None = None, *, handwriting: bool = False) -> dict:
+    if not image_data_url:
+        raise ValueError("请先上传题目图片")
+    with db() as conn:
+        model = get_vision_model(conn, model_id)
+        prompt = merge_handwriting_prompt(get_prompt(conn, "ocr"), handwriting)
+    base_image, base_meta = normalize_ocr_image_data_url(image_data_url, max_long_side=2400 if handwriting else 2000)
+    if not handwriting:
+        result = _vision_ocr_once(model, prompt, base_image, max_long_side=2000)
+        result["handwriting_mode"] = False
+        result["image_preprocessing"] = base_meta
+        result["ocr_confidence"] = result.get("confidence")
+        return result
+
+    enhanced_image, enhanced_meta = preprocess_for_handwriting(base_image, max_long_side=2600)
+    red_image, red_meta = preprocess_red_marks(base_image, max_long_side=2600)
+    pass_specs = [
+        ("原图", base_image, 2400, 3000),
+        ("笔迹增强", enhanced_image, 2600, 3000),
+        ("红笔增强", red_image, 2600, 2800),
+    ]
+
+    def recognize_pass(spec: tuple[str, str, int, int]) -> dict:
+        label, image, long_side, tokens = spec
+        try:
+            return {"label": label, "result": _vision_ocr_once(model, prompt, image, max_long_side=long_side, max_tokens=tokens)}
+        except Exception as exc:
+            return {"label": label, "failure": f"{label}识别未完成：{str(exc)[:100]}"}
+
+    # 三路识别互不依赖，并行后取最佳结果；耗时由三次相加降为最慢一路。
+    outcomes = parallel_run(pass_specs, recognize_pass, max_workers=3)
+    results = [item["result"] for item in outcomes if item.get("result")]
+    failures = [item["failure"] for item in outcomes if item.get("failure")]
+    if not results:
+        raise RuntimeError("图片识别服务暂时没有返回可用文字，图片已经保留，请稍后从错题本继续处理")
+    chosen = merge_ocr_passes(*results)
+    chosen["handwriting_mode"] = True
+    chosen["recognition_passes"] = len(results)
+    chosen["recognition_warnings"] = failures
+    chosen["image_preprocessing"] = {"base": base_meta, "enhanced": enhanced_meta, "red_channel": red_meta}
+    chosen["ocr_confidence"] = chosen.get("confidence")
+    chosen["photo_tips"] = HANDWRITING_PHOTO_TIPS
+    return chosen
 
 
 def diagnose_with_llm(
@@ -1864,61 +2235,122 @@ def diagnose_with_llm(
     wrong_answer: str = "",
     image_text: str = "",
     model_id: str | None = None,
-    subject: str = "è‡ªåŠ¨è¯†åˆ«",
+    subject: str = "自动识别",
+    rag_context: str = "",
 ) -> dict:
     with db() as conn:
         model = get_model(conn, model_id)
         prompt = get_prompt(conn, "diagnosis")
-    user_text = f"""ç”¨æˆ·é€‰æ‹©çš„å­¦ç§‘/åœºæ™¯ï¼š
-{subject or "è‡ªåŠ¨è¯†åˆ«"}
+    selected_provider = str(model.get("provider") or "").lower()
+    metaso_context = ""
+    try:
+        metaso_context = metaso_client.build_answer_context(
+            f"请分析并解答下面这道题，指出关键方法、易错点，并给出可核验依据：\n学科：{subject}\n题目：{question_text}\n学生作答：{wrong_answer or '未提供'}"
+        )
+    except Exception:
+        metaso_context = ""
+    combined_rag_context = "\n\n".join(part for part in (rag_context, metaso_context) if part)
+    user_text = f"""用户选择的学科/场景：
+{subject or "自动识别"}
 
-é¢˜ç›® OCR æ–‡æœ¬ï¼š
-{image_text or "(æ— )"}
+题目 OCR 文本：
+{image_text or "(无)"}
 
-ç”¨æˆ·ä¿®æ­£åŽçš„é¢˜å¹²ï¼š
+用户修正后的题干：
 {question_text}
 
-å­¦ç”Ÿä½œç­”/é”™è§£/æ‰¹æ³¨/å¡ç‚¹ï¼š
-{wrong_answer or "(æœªæä¾›)"}
+学生作答/错解/批注/卡点：
+{wrong_answer or "(未提供)"}
 
-è¯·æŒ‰æç¤ºè¯å›ºå®š JSON ç»“æž„è¾“å‡ºã€‚"""
-    raw = minimax_chat(
-        model,
-        [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_text},
-        ],
-        max_tokens=int(model.get("max_tokens") or 7000),
-        temperature=float(model.get("temperature") or 0.45),
-    )
-    result = extract_json(raw)
-    result.setdefault("subject", subject or "è‡ªåŠ¨è¯†åˆ«")
+高考母题库 RAG 检索资料（优先依据；若与题目无关须说明）：
+{combined_rag_context or "(未检索到母题资料，请按通用数学推理作答)"}
+
+请按提示词固定 JSON 结构输出；若使用了 RAG 资料，请在结果中体现依据，且不得捏造资料中不存在的内容。"""
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_text},
+    ]
+    primary_model_succeeded = False
+    primary_model_error = ""
+    fallback_provider = ""
+    try:
+        raw = minimax_chat(
+            model,
+            messages,
+            max_tokens=int(model.get("max_tokens") or 7000),
+            temperature=float(model.get("temperature") or 0.45),
+            timeout=90,
+        )
+        result = extract_json(raw)
+        primary_model_succeeded = True
+    except Exception as exc:
+        primary_model_error = str(exc)[:160]
+        result = None
+        if selected_provider == "metaso":
+            try:
+                with db() as conn:
+                    fallback_row = conn.execute(
+                        "select * from model_configs where provider != 'metaso' order by is_default desc, updated_at desc limit 1"
+                    ).fetchone()
+                if fallback_row:
+                    fallback_model = dict(fallback_row)
+                    fallback_provider = str(fallback_model.get("provider") or "model")
+                    fallback_raw = minimax_chat(
+                        fallback_model,
+                        messages,
+                        max_tokens=int(fallback_model.get("max_tokens") or 7000),
+                        temperature=float(fallback_model.get("temperature") or 0.45),
+                        timeout=90,
+                    )
+                    result = extract_json(fallback_raw)
+            except Exception as fallback_exc:
+                primary_model_error = f"{primary_model_error}；备用模型也未完成：{str(fallback_exc)[:120]}"
+        if result is None:
+            result = build_skeleton_diagnosis(question_text, wrong_answer, subject)
+            result["needs_review"] = True
+            result.setdefault("student_answer_analysis", {})["evidence"] = [
+                f"深拆模型暂不可用，已回退骨架拆题：{primary_model_error}"
+            ]
+            result["gaokao_rag"] = {"used": bool(combined_rag_context), "mode": "deep_fallback_skeleton", "metaso_used": bool(metaso_context)}
+    result.setdefault("subject", subject or "自动识别")
     result.setdefault("confidence", 0.75)
-    result.setdefault("core_pattern", "å¾…å½’çº³é¢˜åž‹")
+    result.setdefault("external_qa", {
+        "provider": "metaso",
+        "attempted": selected_provider == "metaso" or bool(metaso_context),
+        "used": bool(metaso_context) or (selected_provider == "metaso" and primary_model_succeeded),
+        "primary_model": selected_provider == "metaso" and primary_model_succeeded,
+        "fallback_provider": fallback_provider,
+        "error": primary_model_error if selected_provider == "metaso" and not primary_model_succeeded else "",
+        "kept_minimax": selected_provider != "metaso" or fallback_provider == "minimax",
+    })
+    result.setdefault("core_pattern", "待归纳题型")
     result.setdefault("practice_variants", [])
     result.setdefault("knowledge_points", [])
     result.setdefault(
         "student_answer_analysis",
         {
-            "answer_presence": "æœªæä¾›" if not wrong_answer else "å·²æä¾›",
+            "answer_presence": "未提供" if not wrong_answer else "已提供",
             "extracted_work": wrong_answer,
-            "answer_status": "å¾…æ¨¡åž‹è¿›ä¸€æ­¥åˆ¤æ–­" if wrong_answer else "æœªæä¾›ä½œç­”",
-            "likely_issue": "" if not wrong_answer else "å·²è®°å½•å­¦ç”Ÿä½œç­”/å¡ç‚¹ï¼Œéœ€ç»“åˆæ‹†é¢˜ç»“æžœåˆ¤æ–­",
+            "answer_status": "待模型进一步判断" if wrong_answer else "未提供作答",
+            "likely_issue": "" if not wrong_answer else "已记录学生作答/卡点，需结合拆题结果判断",
             "evidence": [],
-            "next_action": "å…ˆè¡¥å……å­¦ç”Ÿä½œç­”æˆ–é”™è§£è¿‡ç¨‹" if not wrong_answer else "å¯¹ç…§æ¨¡åž‹æ­¥éª¤å®šä½æ–­ç‚¹",
+            "next_action": "先补充学生作答或错解过程" if not wrong_answer else "对照模型步骤定位断点",
         },
     )
     result.setdefault(
         "learning_strategy",
         {
-            "decomposition_answer": "å…ˆè¯†åˆ«é¢˜åž‹å’Œé¢˜ç›®ç›®æ ‡ï¼Œå†æ‹†æ¡ä»¶ã€é€‰æ¨¡åž‹ã€æ‰§è¡Œè®¡ç®—æˆ–ä½œç­”ï¼Œæœ€åŽç”¨å°é¢˜éªŒè¯ã€‚",
-            "make_it_easier": "å…ˆæŠŠé¢˜ç›®é™é˜¶æˆä¸€ä¸ªæ›´å°çš„åŽŸåž‹é¢˜ï¼Œå†ä»ŽåŽŸåž‹é¢˜è¿ç§»å›žåŽŸé¢˜ã€‚",
-            "entry_point": result.get("core_pattern") or result.get("topic") or "é¢˜åž‹å…¥å£",
-            "cognitive_ladder": ["çœ‹æ‡‚é¢˜ç›®ç›®æ ‡", "æ‰¾åˆ°å¯å¥—ç”¨çš„æ¨¡åž‹", "å®Œæˆä¸€æ­¥ä¸€éªŒç®—"],
-            "micro_drills": ["ç”¨ä¸€å¥è¯è¯´å‡ºé¢˜ç›®ç±»åž‹", "å†™å‡ºç¬¬ä¸€æ­¥æ‹†è§£å…¬å¼æˆ–ç­”é¢˜è§’åº¦"],
-            "teacher_hint": "è¿™é“é¢˜ç¬¬ä¸€çœ¼æœ€åƒå“ªä¸€ç±»ä½ å·²ç»åšè¿‡çš„é¢˜ï¼Ÿ",
+            "decomposition_answer": "先识别题型和题目目标，再拆条件、选模型、执行计算或作答，最后用小题验证。",
+            "make_it_easier": "先把题目降阶成一个更小的原型题，再从原型题迁移回原题。",
+            "entry_point": result.get("core_pattern") or result.get("topic") or "题型入口",
+            "cognitive_ladder": ["看懂题目目标", "找到可套用的模型", "完成一步一验算"],
+            "micro_drills": ["用一句话说出题目类型", "写出第一步拆解公式或答题角度"],
+            "teacher_hint": "这道题第一眼最像哪一类你已经做过的题？",
         },
     )
+    if selected_provider == "metaso" and not primary_model_succeeded and fallback_provider:
+        evidence = result.setdefault("student_answer_analysis", {}).setdefault("evidence", [])
+        evidence.append(f"秘塔联网拆题未完成（{primary_model_error}），本次已自动由 {fallback_provider} 完成结构化拆题。")
     return normalize_diagnosis_payload(result, question_text, wrong_answer)
 
 
@@ -1926,22 +2358,22 @@ def grade_with_llm(variant: dict, answer_text: str, diagnosis: dict | None, mode
     with db() as conn:
         model = get_model(conn, model_id)
         prompt = get_prompt(conn, "grading")
-    user_text = f"""åŽŸé¢˜è¯Šæ–­æ‘˜è¦ï¼š
+    user_text = f"""原题诊断摘要：
 {json.dumps(diagnosis or {}, ensure_ascii=False)}
 
-å˜å¼é¢˜ï¼š
+变式题：
 {variant["stem"]}
 
-å‚è€ƒç­”æ¡ˆï¼š
+参考答案：
 {variant["answer"]}
 
-å‚è€ƒè§£æžï¼š
+参考解析：
 {variant["analysis"]}
 
-å­¦ç”Ÿç­”æ¡ˆï¼š
+学生答案：
 {answer_text}
 
-è¯·æŒ‰ JSON æ ¼å¼æ‰¹æ”¹ã€‚"""
+请按 JSON 格式批改。"""
     raw = minimax_chat(
         model,
         [{"role": "system", "content": prompt}, {"role": "user", "content": user_text}],
@@ -1966,7 +2398,7 @@ def save_variants(conn: sqlite3.Connection, wrong_id: str, diagnosis: dict) -> l
     for idx, item in enumerate(variants[:3], start=1):
         variant_id = str(uuid.uuid4())
         level = int(item.get("level") or idx)
-        title = item.get("title") or ("åŒç»“æž„å·©å›º" if level == 1 else "æ¡ä»¶æ›¿æ¢" if level == 2 else "è¿ç§»æŒ‘æˆ˜")
+        title = item.get("title") or ("同结构巩固" if level == 1 else "条件替换" if level == 2 else "迁移挑战")
         conn.execute(
             """
             insert into exercise_variants
@@ -2031,59 +2463,59 @@ def build_study_card_prompt(item: dict, style: str = "") -> str:
     step_lines = []
     for idx, step in enumerate((decomposition.get("step_formulas") or [])[:5], start=1):
         step_lines.append(
-            f"{idx}. {compact_text(step.get('name'), 30)}ï¼š{compact_text(step.get('formula') or step.get('operation'), 120)}"
+            f"{idx}. {compact_text(step.get('name'), 30)}：{compact_text(step.get('formula') or step.get('operation'), 120)}"
         )
 
     self_checks = [
-        "æˆ‘æ˜¯å¦å…ˆè¯†åˆ«é¢˜åž‹å…¥å£ï¼Ÿ",
-        "æˆ‘æ˜¯å¦å†™æ¸…å…³é”®å…¬å¼/é‡‡åˆ†ç‚¹ï¼Ÿ",
-        "æˆ‘æ˜¯å¦åŒºåˆ†äº†æ˜“æ··æ¦‚å¿µå’Œæœ€ç»ˆç›®æ ‡ï¼Ÿ",
+        "我是否先识别题型入口？",
+        "我是否写清关键公式/采分点？",
+        "我是否区分了易混概念和最终目标？",
     ]
 
     payload = {
-        "æ ‡é¢˜": f"{diagnosis.get('subject') or 'å…¨ç§‘é¢˜ç›®'}ï½œé”™é¢˜æŒ‡å¯¼å­¦ä¹ è®­ç»ƒå¡ç‰‡",
-        "ä¸»é¢˜": diagnosis.get("topic") or diagnosis.get("core_pattern") or "é¢˜ç›®æ‹†è§£è®­ç»ƒ",
-        "é”™å› æ ‡ç­¾": (diagnosis.get("knowledge_points") or [])[:3] + traps[:3],
-        "é¢˜ç›®": compact_text(diagnosis.get("cleaned_question") or item.get("corrected_text"), 520),
-        "ä¸ºä»€ä¹ˆå®¹æ˜“é”™": compact_text(student.get("likely_issue") or "å…¥å£ã€å…¬å¼ã€æ¡ä»¶æˆ–è¡¨è¾¾å®¹æ˜“æ··åœ¨ä¸€èµ·ï¼Œéœ€è¦å…ˆæ‹†é¢˜å†ä½œç­”ã€‚", 260),
-        "çº é”™æ€è·¯": step_lines or [compact_text(strategy.get("decomposition_answer"), 260)],
-        "è§„èŒƒè§£ç­”": compact_text(answer.get("concise_solution") or answer.get("final_answer"), 620),
-        "å…³é”®æé†’": compact_text(strategy.get("make_it_easier") or first_model.get("applies_when"), 220),
-        "å˜å¼è®­ç»ƒ": compact_text(first_variant.get("stem") or "æŠŠæ¡ä»¶æ›¿æ¢æˆåŒç»“æž„æ–°é¢˜ï¼Œå…ˆè¯´å…¥å£ï¼Œå†å†™å…³é”®æ­¥éª¤ã€‚", 280),
-        "è‡ªæˆ‘å¤ç›˜": self_checks,
-        "æ€»ç»“å°è¯—": compact_text("ï¼›".join(poem.get("lines") or []), 180),
+        "标题": f"{diagnosis.get('subject') or '全科题目'}｜错题指导学习训练卡片",
+        "主题": diagnosis.get("topic") or diagnosis.get("core_pattern") or "题目拆解训练",
+        "错因标签": (diagnosis.get("knowledge_points") or [])[:3] + traps[:3],
+        "题目": compact_text(diagnosis.get("cleaned_question") or item.get("corrected_text"), 520),
+        "为什么容易错": compact_text(student.get("likely_issue") or "入口、公式、条件或表达容易混在一起，需要先拆题再作答。", 260),
+        "纠错思路": step_lines or [compact_text(strategy.get("decomposition_answer"), 260)],
+        "规范解答": compact_text(answer.get("concise_solution") or answer.get("final_answer"), 620),
+        "关键提醒": compact_text(strategy.get("make_it_easier") or first_model.get("applies_when"), 220),
+        "变式训练": compact_text(first_variant.get("stem") or "把条件替换成同结构新题，先说入口，再写关键步骤。", 280),
+        "自我复盘": self_checks,
+        "总结小诗": compact_text("；".join(poem.get("lines") or []), 180),
     }
 
-    return f"""è¯·ç”Ÿæˆä¸€å¼ ç«–ç‰ˆä¸­æ–‡æ•™è¾…å­¦ä¹ å¡ç‰‡ï¼Œæ¯”ä¾‹ 2:3ï¼Œé€‚åˆæ‰‹æœºä¿å­˜å’Œæ‰“å°ã€‚
+    return f"""请生成一张竖版中文教辅学习卡片，比例 2:3，适合手机保存和打印。
 
-è§†è§‰é£Žæ ¼ï¼š
-- å‚è€ƒä¸­å›½æ•™è¾…äº§å“çš„æ¸…çˆ½è“ç™½åº•è‰²ï¼Œè¾…ä»¥å°‘é‡æ©™é‡‘æé†’è‰²ï¼›çº¿æ¡å¹²å‡€ï¼Œå±‚çº§æ¸…æ¥šã€‚
-- ä¸è¦åšè¥é”€æµ·æŠ¥ï¼Œä¸è¦çœŸå®žæœºæž„ logoï¼Œä¸è¦äºŒç»´ç ï¼Œä¸è¦æ°´å°ã€‚
-- ç‰ˆå¼å¿…é¡»åƒä¸€å¼ å®Œæ•´çš„â€œé”™é¢˜æŒ‡å¯¼å­¦ä¹ è®­ç»ƒå¡ç‰‡â€ï¼ŒåŒ…å«ç¼–å· 01 åˆ° 07 çš„ä¸ƒå—å†…å®¹ã€‚
-- å°½é‡ä¿æŒä¸­æ–‡æ–‡å­—æ¸…æ™°ï¼Œå…¬å¼ç”¨å¯è¯»çš„æ•°å­¦æŽ’ç‰ˆï¼›å†…å®¹è¿‡é•¿æ—¶å¯ä»¥åŽ‹ç¼©æ‘˜è¦ï¼Œä½†ä¸è¦æ”¹é¢˜æ„ã€‚
-- æ¯ä¸ªåŒºå—ç”¨åœ†è§’ 8px ä»¥å†…çš„æ¸…æ™°è¾¹æ¡†æˆ–åˆ†éš”çº¿ï¼Œé¿å…æ–‡å­—é‡å ã€‚
+视觉风格：
+- 参考中国教辅产品的清爽蓝白底色，辅以少量橙金提醒色；线条干净，层级清楚。
+- 不要做营销海报，不要真实机构 logo，不要二维码，不要水印。
+- 版式必须像一张完整的“错题指导学习训练卡片”，包含编号 01 到 07 的七块内容。
+- 尽量保持中文文字清晰，公式用可读的数学排版；内容过长时可以压缩摘要，但不要改题意。
+- 每个区块用圆角 8px 以内的清晰边框或分隔线，避免文字重叠。
 
-ä¸ƒå—å›ºå®šç»“æž„ï¼š
-01 é¢˜ç›®
-02 è¿™é“é¢˜ä¸ºä»€ä¹ˆå®¹æ˜“é”™ï¼Ÿ
-03 çº é”™æ€è·¯
-04 è§„èŒƒè§£ç­”
-05 å…³é”®æé†’
-06 å˜å¼è®­ç»ƒ
-07 è‡ªæˆ‘å¤ç›˜
+七块固定结构：
+01 题目
+02 这道题为什么容易错？
+03 纠错思路
+04 规范解答
+05 关键提醒
+06 变式训练
+07 自我复盘
 
-å¡ç‰‡æ•°æ®ï¼š
+卡片数据：
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-é¢å¤–é£Žæ ¼è¦æ±‚ï¼š
-{style or "åšæˆä¸“ä¸šã€æ¼‚äº®ã€å¯ä¿¡çš„é«˜è€ƒ/ä¸­è€ƒé”™é¢˜è®­ç»ƒå¡ã€‚"}"""
+额外风格要求：
+{style or "做成专业、漂亮、可信的高考/中考错题训练卡。"}"""
 
 
 def call_image_generation(model_config: dict, prompt: str) -> bytes:
     provider = (model_config.get("provider") or "openai").lower()
     compatible_providers = {"openai", "fenno", "openai-compatible", "oneapi", "newapi"}
     if provider not in compatible_providers:
-        raise RuntimeError("å½“å‰å›¾ç‰‡ç”Ÿæˆæ”¯æŒ OpenAI å…¼å®¹ Images APIã€‚è¯·æŠŠä¸­è½¬ç«™ provider å¡«ä¸º openaiã€fenno æˆ– openai-compatibleã€‚")
+        raise RuntimeError("当前图片生成支持 OpenAI 兼容 Images API。请把中转站 provider 填为 openai、fenno 或 openai-compatible。")
     provider_label = model_config.get("provider") or "openai"
     api_key = (
         model_config.get("api_key")
@@ -2092,7 +2524,7 @@ def call_image_generation(model_config: dict, prompt: str) -> bytes:
         or os.environ.get("OPENAI_API_KEY")
     )
     if not api_key:
-        raise RuntimeError(f"{provider_label} å›¾ç‰‡ API Key æœªé…ç½®ï¼Œè¯·åœ¨åŽå°å›¾ç‰‡æ¨¡åž‹é…ç½®ä¸­ä¿å­˜ Keyï¼Œæˆ–åœ¨æœåŠ¡å™¨çŽ¯å¢ƒå˜é‡ä¸­è®¾ç½® FENNO_API_KEY / OPENAI_API_KEYã€‚")
+        raise RuntimeError(f"{provider_label} 图片 API Key 未配置，请在后台图片模型配置中保存 Key，或在服务器环境变量中设置 FENNO_API_KEY / OPENAI_API_KEY。")
 
     payload = {
         "model": model_config.get("model") or DEFAULT_OPENAI_IMAGE_MODEL,
@@ -2121,20 +2553,20 @@ def call_image_generation(model_config: dict, prompt: str) -> bytes:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{provider_label} å›¾ç‰‡ç”Ÿæˆå¤±è´¥ï¼šHTTP {exc.code} {detail[:800]}") from exc
+        raise RuntimeError(f"{provider_label} 图片生成失败：HTTP {exc.code} {detail[:800]}") from exc
     except (urllib.error.URLError, OSError) as exc:
-        raise RuntimeError(f"{provider_label} å›¾ç‰‡ç”Ÿæˆç½‘ç»œé”™è¯¯ï¼š{exc}") from exc
+        raise RuntimeError(f"{provider_label} 图片生成网络错误：{exc}") from exc
 
     items = data.get("data") or []
     if not items:
-        raise RuntimeError(f"{provider_label} å›¾ç‰‡è¿”å›žä¸ºç©ºï¼š{json.dumps(data, ensure_ascii=False)[:600]}")
+        raise RuntimeError(f"{provider_label} 图片返回为空：{json.dumps(data, ensure_ascii=False)[:600]}")
     first = items[0]
     if first.get("b64_json"):
         return base64.b64decode(first["b64_json"])
     if first.get("url"):
         with urllib.request.urlopen(first["url"], timeout=180) as resp:
             return resp.read()
-    raise RuntimeError(f"{provider_label} å›¾ç‰‡è¿”å›žæ ¼å¼å¼‚å¸¸ï¼š{json.dumps(data, ensure_ascii=False)[:600]}")
+    raise RuntimeError(f"{provider_label} 图片返回格式异常：{json.dumps(data, ensure_ascii=False)[:600]}")
 
 
 def generate_study_card(wrong_id: str, image_model_id: str | None = None, style: str = "") -> dict:
@@ -2213,7 +2645,7 @@ def get_wrong_question(conn: sqlite3.Connection, wrong_id: str) -> dict | None:
 def clean_subject_name(value: object) -> str:
     subject = str(value or "").strip()
     if not subject or re.fullmatch(r"\?+", subject):
-        return "æœªè¯†åˆ«å­¦ç§‘"
+        return "未识别学科"
     return subject
 
 
@@ -2261,17 +2693,17 @@ def append_list(lines: list[str], title: str, values: list) -> None:
 
 def build_profile_markdown(conn: sqlite3.Connection, data: dict, user: dict | None) -> dict:
     selections: dict = data.get("selections") or {}
-    subject_filter = data.get("subject") or "å…¨éƒ¨å­¦ç§‘"
+    subject_filter = data.get("subject") or "全部学科"
     if not selections:
-        raise ValueError("è¯·è‡³å°‘é€‰æ‹©ä¸€é“é¢˜ç›®")
+        raise ValueError("请至少选择一道题目")
     if not user:
-        raise ValueError("è¯·å…ˆç™»å½•åŽå†å¯¼å‡ºæ¡£æ¡ˆ")
+        raise ValueError("请先登录后再导出档案")
 
     lines = [
-        f"# ä¸ªäººå­¦ä¹ æ¡£æ¡ˆ - {subject_filter}",
+        f"# 个人学习档案 - {subject_filter}",
         "",
-        f"> å¯¼å‡ºæ—¶é—´ï¼š{now_iso()}",
-        "> å†…å®¹æ¥æºï¼šOCR é¢˜ç›®ã€AI æ‹†é¢˜ç»“æžœã€å·©å›ºé¢˜ä¸Žæ‰¹æ”¹è®°å½•ã€‚",
+        f"> 导出时间：{now_iso()}",
+        "> 内容来源：OCR 题目、AI 拆题结果、巩固题与批改记录。",
         "",
     ]
     exported_count = 0
@@ -2286,109 +2718,109 @@ def build_profile_markdown(conn: sqlite3.Connection, data: dict, user: dict | No
             continue
         diagnosis = item.get("diagnosis") or {}
         subject = clean_subject_name(diagnosis.get("subject"))
-        if subject_filter != "å…¨éƒ¨å­¦ç§‘" and subject != subject_filter:
+        if subject_filter != "全部学科" and subject != subject_filter:
             continue
 
         exported_count += 1
-        title = diagnosis.get("core_pattern") or diagnosis.get("topic") or "é¢˜ç›®æ¡£æ¡ˆ"
-        lines.extend([f"## {exported_count}. {title}", "", f"- å­¦ç§‘ï¼š{subject}", f"- çŠ¶æ€ï¼š{item.get('status')}", ""])
+        title = diagnosis.get("core_pattern") or diagnosis.get("topic") or "题目档案"
+        lines.extend([f"## {exported_count}. {title}", "", f"- 学科：{subject}", f"- 状态：{item.get('status')}", ""])
 
         if options.get("question"):
-            lines.extend(["### é¢˜ç›®", md_escape(item.get("corrected_text")), ""])
+            lines.extend(["### 题目", md_escape(item.get("corrected_text")), ""])
         if options.get("ocr") and item.get("ocr_text"):
-            lines.extend(["### OCR åŽŸæ–‡", md_escape(item.get("ocr_text")), ""])
+            lines.extend(["### OCR 原文", md_escape(item.get("ocr_text")), ""])
         if options.get("student"):
             analysis = diagnosis.get("student_answer_analysis") or {}
-            lines.extend(["### ä½œç­”æƒ…å†µ", f"- ä½œç­”å­˜åœ¨ï¼š{md_escape(analysis.get('answer_presence') or ('å·²æä¾›' if item.get('student_wrong_answer') else 'æœªæä¾›'))}"])
+            lines.extend(["### 作答情况", f"- 作答存在：{md_escape(analysis.get('answer_presence') or ('已提供' if item.get('student_wrong_answer') else '未提供'))}"])
             if item.get("student_wrong_answer"):
-                lines.append(f"- åŽŸå§‹ä½œç­”/å¡ç‚¹ï¼š{md_escape(item.get('student_wrong_answer'))}")
+                lines.append(f"- 原始作答/卡点：{md_escape(item.get('student_wrong_answer'))}")
             if analysis.get("extracted_work"):
-                lines.append(f"- ç»“æž„åŒ–ä½œç­”ï¼š{md_escape(analysis.get('extracted_work'))}")
+                lines.append(f"- 结构化作答：{md_escape(analysis.get('extracted_work'))}")
             if analysis.get("answer_status"):
-                lines.append(f"- çŠ¶æ€åˆ¤æ–­ï¼š{md_escape(analysis.get('answer_status'))}")
+                lines.append(f"- 状态判断：{md_escape(analysis.get('answer_status'))}")
             if analysis.get("likely_issue"):
-                lines.append(f"- ä¸»è¦é—®é¢˜ï¼š{md_escape(analysis.get('likely_issue'))}")
+                lines.append(f"- 主要问题：{md_escape(analysis.get('likely_issue'))}")
             if analysis.get("next_action"):
-                lines.append(f"- ä¸‹ä¸€æ­¥ï¼š{md_escape(analysis.get('next_action'))}")
+                lines.append(f"- 下一步：{md_escape(analysis.get('next_action'))}")
             lines.append("")
         if options.get("answer"):
             answer = diagnosis.get("standard_answer") or {}
-            lines.extend(["### ç­”æ¡ˆ", md_escape(answer.get("final_answer") or "æœªè¿”å›žæœ€ç»ˆç­”æ¡ˆ"), ""])
+            lines.extend(["### 答案", md_escape(answer.get("final_answer") or "未返回最终答案"), ""])
         if options.get("analysis"):
             answer = diagnosis.get("standard_answer") or {}
-            lines.extend(["### è§£æž", md_escape(answer.get("concise_solution") or "æœªè¿”å›žæ ‡å‡†è§£æž"), ""])
+            lines.extend(["### 解析", md_escape(answer.get("concise_solution") or "未返回标准解析"), ""])
             decomposition = diagnosis.get("decomposition") or {}
             if decomposition.get("total_formula"):
-                lines.extend(["### æ€»æ‹†è§£å…¬å¼", md_escape(decomposition.get("total_formula")), ""])
+                lines.extend(["### 总拆解公式", md_escape(decomposition.get("total_formula")), ""])
         if options.get("strategy"):
             strategy = diagnosis.get("learning_strategy") or {}
-            lines.extend(["### å­¦ä¹ æ–¹æ³•"])
+            lines.extend(["### 学习方法"])
             if strategy.get("decomposition_answer"):
-                lines.append(f"- æ€Žä¹ˆæ‹†è§£ï¼š{md_escape(strategy.get('decomposition_answer'))}")
+                lines.append(f"- 怎么拆解：{md_escape(strategy.get('decomposition_answer'))}")
             if strategy.get("make_it_easier"):
-                lines.append(f"- æ€Žä¹ˆæ›´å®¹æ˜“å­¦ï¼š{md_escape(strategy.get('make_it_easier'))}")
+                lines.append(f"- 怎么更容易学：{md_escape(strategy.get('make_it_easier'))}")
             if strategy.get("entry_point"):
-                lines.append(f"- å…¥å£ï¼š{md_escape(strategy.get('entry_point'))}")
+                lines.append(f"- 入口：{md_escape(strategy.get('entry_point'))}")
             if strategy.get("teacher_hint"):
-                lines.append(f"- è€å¸ˆå¼•å¯¼ï¼š{md_escape(strategy.get('teacher_hint'))}")
+                lines.append(f"- 老师引导：{md_escape(strategy.get('teacher_hint'))}")
             for step in strategy.get("cognitive_ladder", []) or []:
-                lines.append(f"- è®¤çŸ¥å°é˜¶ï¼š{md_escape(step)}")
+                lines.append(f"- 认知台阶：{md_escape(step)}")
             for drill in strategy.get("micro_drills", []) or []:
-                lines.append(f"- å¾®ç»ƒä¹ ï¼š{md_escape(drill)}")
+                lines.append(f"- 微练习：{md_escape(drill)}")
             lines.append("")
         if options.get("thinking"):
             decomposition = diagnosis.get("decomposition") or {}
-            lines.append("### è¯¦ç»†æ€è·¯")
+            lines.append("### 详细思路")
             for step in decomposition.get("step_formulas", []) or []:
-                lines.append(f"- **{md_escape(step.get('name'))}**ï¼š{md_escape(step.get('formula'))}")
+                lines.append(f"- **{md_escape(step.get('name'))}**：{md_escape(step.get('formula'))}")
                 if step.get("operation"):
-                    lines.append(f"  - æ“ä½œï¼š{md_escape(step.get('operation'))}")
+                    lines.append(f"  - 操作：{md_escape(step.get('operation'))}")
                 if step.get("student_trap"):
-                    lines.append(f"  - æ˜“é”™ç‚¹ï¼š{md_escape(step.get('student_trap'))}")
+                    lines.append(f"  - 易错点：{md_escape(step.get('student_trap'))}")
             for model in diagnosis.get("solution_models", []) or []:
-                lines.append(f"- **æ¨¡åž‹ï¼š{md_escape(model.get('model_name'))}**")
+                lines.append(f"- **模型：{md_escape(model.get('model_name'))}**")
                 for step in model.get("steps", []) or []:
                     lines.append(f"  - {md_escape(step)}")
             lines.append("")
         if options.get("multi"):
-            lines.append("### ä¸€é¢˜å¤šè§£/å¤šè§†è§’")
+            lines.append("### 一题多解/多视角")
             for method in diagnosis.get("multiple_solutions", []) or []:
-                lines.append(f"- **{md_escape(method.get('method_name'))}**ï¼š{md_escape(method.get('idea'))}")
+                lines.append(f"- **{md_escape(method.get('method_name'))}**：{md_escape(method.get('idea'))}")
                 for step in method.get("steps", []) or []:
                     lines.append(f"  - {md_escape(step)}")
                 if method.get("pros_cons"):
-                    lines.append(f"  - ä¼˜ç¼ºç‚¹ï¼š{md_escape(method.get('pros_cons'))}")
+                    lines.append(f"  - 优缺点：{md_escape(method.get('pros_cons'))}")
             lines.append("")
         if options.get("poem"):
             poem = diagnosis.get("poem") or {}
-            lines.extend([f"### {md_escape(poem.get('title') or 'å¤ç›˜å°è¯—')}"])
+            lines.extend([f"### {md_escape(poem.get('title') or '复盘小诗')}"])
             for line in poem.get("lines", []) or []:
                 lines.append(f"> {md_escape(line)}")
             for review in poem.get("line_reviews", []) or []:
-                lines.append(f"- {md_escape(review.get('line'))}ï¼š{md_escape(review.get('review'))}")
+                lines.append(f"- {md_escape(review.get('line'))}：{md_escape(review.get('review'))}")
             lines.append("")
         if options.get("similar"):
-            lines.append("### åŒç±»é¢˜/å·©å›ºé¢˜")
+            lines.append("### 同类题/巩固题")
             for variant in item.get("variants", []) or []:
-                lines.append(f"#### ç¬¬ {variant.get('level')} é¢˜ï¼š{md_escape(variant.get('title'))}")
+                lines.append(f"#### 第 {variant.get('level')} 题：{md_escape(variant.get('title'))}")
                 lines.append(md_escape(variant.get("stem")))
                 lines.append("")
-                lines.append(f"- ç­”æ¡ˆï¼š{md_escape(variant.get('answer'))}")
-                lines.append(f"- è§£æžï¼š{md_escape(variant.get('analysis'))}")
+                lines.append(f"- 答案：{md_escape(variant.get('answer'))}")
+                lines.append(f"- 解析：{md_escape(variant.get('analysis'))}")
                 if variant.get("answers"):
                     latest = variant["answers"][0]
                     grading = latest.get("grading_result") or {}
-                    lines.append(f"- æœ€è¿‘ä½œç­”ï¼š{md_escape(latest.get('answer_text'))}")
-                    lines.append(f"- æ‰¹æ”¹ï¼š{md_escape(grading.get('comment'))}")
+                    lines.append(f"- 最近作答：{md_escape(latest.get('answer_text'))}")
+                    lines.append(f"- 批改：{md_escape(grading.get('comment'))}")
                 lines.append("")
         lines.append("---")
         lines.append("")
 
     if exported_count == 0:
-        raise ValueError("æ²¡æœ‰ç¬¦åˆæ¡ä»¶çš„å¯¼å‡ºå†…å®¹")
+        raise ValueError("没有符合条件的导出内容")
     filename_subject = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "_", subject_filter)
     return {
-        "filename": f"{filename_subject}_ä¸ªäººå­¦ä¹ æ¡£æ¡ˆ.md",
+        "filename": f"{filename_subject}_个人学习档案.md",
         "markdown": "\n".join(lines),
         "count": exported_count,
     }
@@ -2454,10 +2886,10 @@ def build_report(conn: sqlite3.Connection, user: dict | None) -> dict:
     issue_counts: dict[str, int] = {}
     for row in conn.execute(f"select diagnosis from wrong_questions{wq_where}", wq_params).fetchall():
         diagnosis = json.loads(row["diagnosis"])
-        pattern = diagnosis.get("core_pattern") or diagnosis.get("topic") or "æœªå½’ç±»"
+        pattern = diagnosis.get("core_pattern") or diagnosis.get("topic") or "未归类"
         pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
         answer_status = (diagnosis.get("student_answer_analysis") or {}).get("answer_status") or ""
-        if answer_status and answer_status not in {"æœªæä¾›ä½œç­”", "å¾…æ¨¡åž‹è¿›ä¸€æ­¥åˆ¤æ–­", "ç©ºç™½ä¸ä¼š"}:
+        if answer_status and answer_status not in {"未提供作答", "待模型进一步判断", "空白不会"}:
             issue_counts[answer_status] = issue_counts.get(answer_status, 0) + 1
         for model in diagnosis.get("solution_models", []):
             for mistake in model.get("common_mistakes", []):
@@ -2483,60 +2915,60 @@ def structured_tool_schema(delivery: str) -> str:
     schemas = {
         "docx": """
 {
-  "title": "æ–‡æ¡£æ ‡é¢˜",
-  "summary": "200å­—ä»¥å†…æ‘˜è¦",
-  "document_markdown": "å®Œæ•´ Markdown æ­£æ–‡",
+  "title": "文档标题",
+  "summary": "200字以内摘要",
+  "document_markdown": "完整 Markdown 正文",
   "sections": [
     {
-      "title": "ç« èŠ‚æ ‡é¢˜",
-      "content": "ç« èŠ‚æ­£æ–‡ï¼Œå¯å«åˆ—è¡¨",
+      "title": "章节标题",
+      "content": "章节正文，可含列表",
       "questions": [
-        {"stem": "é¢˜å¹²", "answer": "ç­”æ¡ˆ", "analysis": "è§£æž"}
+        {"stem": "题干", "answer": "答案", "analysis": "解析"}
       ]
     }
   ]
 }""",
         "pptx": """
 {
-  "title": "è¯¾ä»¶æ ‡é¢˜",
-  "summary": "è®²è¯„æ‘˜è¦",
+  "title": "课件标题",
+  "summary": "讲评摘要",
   "slides": [
     {
-      "title": "é¡µæ ‡é¢˜",
-      "bullets": ["è¦ç‚¹1", "è¦ç‚¹2"],
-      "speaker_notes": "è®²è¯„å¤‡æ³¨"
+      "title": "页标题",
+      "bullets": ["要点1", "要点2"],
+      "speaker_notes": "讲评备注"
     }
   ],
-  "document_markdown": "å®Œæ•´è®²è¯„æçº² Markdown"
+  "document_markdown": "完整讲评提纲 Markdown"
 }""",
         "report": """
 {
-  "title": "å·é¢å­¦æƒ…åˆ†æžæŠ¥å‘Š",
-  "summary": "æ€»ä½“ç»“è®º",
+  "title": "卷面学情分析报告",
+  "summary": "总体结论",
   "score_overview": {"total_score": "100", "estimated_score": "78", "pass_rate": "78%"},
-  "module_analysis": [{"module": "æ¨¡å—å", "score_rate": "65%", "issue": "é—®é¢˜", "action": "æ”¹è¿›åŠ¨ä½œ"}],
-  "question_type_analysis": [{"type": "é¢˜åž‹", "loss_points": "å¤±åˆ†ç‚¹", "action": "è®­ç»ƒå»ºè®®"}],
-  "weak_knowledge_points": ["è–„å¼±ç‚¹1", "è–„å¼±ç‚¹2"],
-  "error_causes": [{"cause": "åŽŸå› ", "evidence": "ä¾æ®", "fix": "ä¿®æ­£æ–¹æ¡ˆ"}],
-  "layered_suggestions": {"A": "ä¼˜ç­‰ç”Ÿå»ºè®®", "B": "ä¸­ç­‰ç”Ÿå»ºè®®", "C": "å¾…æå‡å»ºè®®"},
-  "action_plan_7d": [{"day": "ç¬¬1å¤©", "tasks": ["ä»»åŠ¡1", "ä»»åŠ¡2"]}],
-  "document_markdown": "å®Œæ•´æŠ¥å‘Š Markdownï¼Œå«è¡¨æ ¼ä¸Žåˆ†èŠ‚"
+  "module_analysis": [{"module": "模块名", "score_rate": "65%", "issue": "问题", "action": "改进动作"}],
+  "question_type_analysis": [{"type": "题型", "loss_points": "失分点", "action": "训练建议"}],
+  "weak_knowledge_points": ["薄弱点1", "薄弱点2"],
+  "error_causes": [{"cause": "原因", "evidence": "依据", "fix": "修正方案"}],
+  "layered_suggestions": {"A": "优等生建议", "B": "中等生建议", "C": "待提升建议"},
+  "action_plan_7d": [{"day": "第1天", "tasks": ["任务1", "任务2"]}],
+  "document_markdown": "完整报告 Markdown，含表格与分节"
 }""",
         "image": """
 {
-  "title": "é…å›¾æ ‡é¢˜",
-  "summary": "é…å›¾è¯´æ˜Ž",
-  "image_prompt": "ç”¨äºŽç”Ÿæˆæ•™å­¦é…å›¾çš„è¯¦ç»†ä¸­æ–‡æç¤ºè¯ï¼Œæè¿°å¸ƒå±€ã€å…ƒç´ ã€æ ‡æ³¨ã€é¢œè‰²ã€é£Žæ ¼",
-  "caption": "å›¾æ³¨"
+  "title": "配图标题",
+  "summary": "配图说明",
+  "image_prompt": "用于生成教学配图的详细中文提示词，描述布局、元素、标注、颜色、风格",
+  "caption": "图注"
 }""",
         "map": """
 {
-  "title": "çŸ¥è¯†å›¾è°±æ ‡é¢˜",
-  "summary": "å›¾è°±è¯´æ˜Ž",
-  "nodes": [{"label": "æ¦‚å¿µ", "detail": "è§£é‡Š"}],
-  "edges": [{"from": "æ¦‚å¿µA", "to": "æ¦‚å¿µB", "label": "å…³ç³»"}],
-  "image_prompt": "å¯é€‰ï¼Œç”Ÿæˆå¯è§†åŒ–å›¾è°±é…å›¾çš„æç¤ºè¯",
-  "document_markdown": "æ–‡å­—ç‰ˆå›¾è°±è¯´æ˜Ž"
+  "title": "知识图谱标题",
+  "summary": "图谱说明",
+  "nodes": [{"label": "概念", "detail": "解释"}],
+  "edges": [{"from": "概念A", "to": "概念B", "label": "关系"}],
+  "image_prompt": "可选，生成可视化图谱配图的提示词",
+  "document_markdown": "文字版图谱说明"
 }""",
     }
     return schemas.get(delivery, schemas["docx"])
@@ -2544,24 +2976,24 @@ def structured_tool_schema(delivery: str) -> str:
 
 def structured_to_markdown(data: dict, delivery: str) -> str:
     if data.get("document_markdown"):
-        parts = [f"# {data.get('title') or 'ç”Ÿæˆç»“æžœ'}", "", data.get("summary") or "", "", data["document_markdown"]]
+        parts = [f"# {data.get('title') or '生成结果'}", "", data.get("summary") or "", "", data["document_markdown"]]
         return "\n".join(part for part in parts if part is not None)
-    lines = [f"# {data.get('title') or 'ç”Ÿæˆç»“æžœ'}", ""]
+    lines = [f"# {data.get('title') or '生成结果'}", ""]
     if data.get("summary"):
         lines.extend([str(data["summary"]), ""])
     if delivery == "report":
         overview = data.get("score_overview") or {}
         if overview:
-            lines.append("## æˆç»©æ¦‚è§ˆ")
+            lines.append("## 成绩概览")
             for key, value in overview.items():
                 lines.append(f"- {key}: {value}")
             lines.append("")
         for section_key, title in [
-            ("module_analysis", "æ¨¡å—è¯Šæ–­"),
-            ("question_type_analysis", "é¢˜åž‹è¯Šæ–­"),
-            ("weak_knowledge_points", "è–„å¼±çŸ¥è¯†ç‚¹"),
-            ("error_causes", "å¤±åˆ†å½’å› "),
-            ("action_plan_7d", "7æ—¥è¡ŒåŠ¨"),
+            ("module_analysis", "模块诊断"),
+            ("question_type_analysis", "题型诊断"),
+            ("weak_knowledge_points", "薄弱知识点"),
+            ("error_causes", "失分归因"),
+            ("action_plan_7d", "7日行动"),
         ]:
             block = data.get(section_key)
             if not block:
@@ -2575,27 +3007,27 @@ def structured_to_markdown(data: dict, delivery: str) -> str:
                     lines.append(f"- {key}: {value}")
             lines.append("")
     if delivery == "pptx":
-        lines.append("## è¯¾ä»¶é¡µ")
+        lines.append("## 课件页")
         for idx, slide in enumerate(data.get("slides") or [], start=1):
-            lines.append(f"### ç¬¬{idx}é¡µ {slide.get('title') or ''}")
+            lines.append(f"### 第{idx}页 {slide.get('title') or ''}")
             for bullet in slide.get("bullets") or []:
                 lines.append(f"- {bullet}")
             if slide.get("speaker_notes"):
-                lines.append(f"> å¤‡æ³¨ï¼š{slide['speaker_notes']}")
+                lines.append(f"> 备注：{slide['speaker_notes']}")
             lines.append("")
     if delivery == "map":
-        lines.append("## çŸ¥è¯†èŠ‚ç‚¹")
+        lines.append("## 知识节点")
         for node in data.get("nodes") or []:
-            lines.append(f"- **{node.get('label') or ''}**ï¼š{node.get('detail') or ''}")
+            lines.append(f"- **{node.get('label') or ''}**：{node.get('detail') or ''}")
         lines.append("")
     if data.get("caption"):
-        lines.append(f"å›¾æ³¨ï¼š{data['caption']}")
+        lines.append(f"图注：{data['caption']}")
     return "\n".join(lines).strip()
 
 
 def build_tool_artifacts(conn: sqlite3.Connection, tool: dict, run_id: str, data: dict) -> tuple[list[dict], dict]:
     delivery = tool.get("delivery") or "docx"
-    title = data.get("title") or tool.get("label") or "ç”Ÿæˆç»“æžœ"
+    title = data.get("title") or tool.get("label") or "生成结果"
     safe = export_utils.safe_filename(title, run_id[:8])
     prefix = f"{run_id}_{safe}"
     artifacts: list[dict] = []
@@ -2620,48 +3052,48 @@ def build_tool_artifacts(conn: sqlite3.Connection, tool: dict, run_id: str, data
             }
             report_sections = []
             if report["score_overview"]:
-                report_sections.append({"title": "æˆç»©æ¦‚è§ˆ", "content": "\n".join(f"- {k}: {v}" for k, v in report["score_overview"].items())})
+                report_sections.append({"title": "成绩概览", "content": "\n".join(f"- {k}: {v}" for k, v in report["score_overview"].items())})
             if report["module_analysis"]:
-                report_sections.append({"title": "æ¨¡å—è¯Šæ–­", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["module_analysis"])})
+                report_sections.append({"title": "模块诊断", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["module_analysis"])})
             if report["question_type_analysis"]:
-                report_sections.append({"title": "é¢˜åž‹è¯Šæ–­", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["question_type_analysis"])})
+                report_sections.append({"title": "题型诊断", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["question_type_analysis"])})
             if report["weak_knowledge_points"]:
-                report_sections.append({"title": "è–„å¼±çŸ¥è¯†ç‚¹", "content": "\n".join(f"- {x}" for x in report["weak_knowledge_points"])})
+                report_sections.append({"title": "薄弱知识点", "content": "\n".join(f"- {x}" for x in report["weak_knowledge_points"])})
             if report["error_causes"]:
-                report_sections.append({"title": "å¤±åˆ†å½’å› ", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["error_causes"])})
+                report_sections.append({"title": "失分归因", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["error_causes"])})
             if report["layered_suggestions"]:
-                report_sections.append({"title": "åˆ†å±‚å»ºè®®", "content": "\n".join(f"- {k}: {v}" for k, v in report["layered_suggestions"].items())})
+                report_sections.append({"title": "分层建议", "content": "\n".join(f"- {k}: {v}" for k, v in report["layered_suggestions"].items())})
             if report["action_plan_7d"]:
-                report_sections.append({"title": "7æ—¥è¡ŒåŠ¨æ–¹æ¡ˆ", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["action_plan_7d"])})
+                report_sections.append({"title": "7日行动方案", "content": "\n".join(json.dumps(item, ensure_ascii=False) for item in report["action_plan_7d"])})
             if body:
-                report_sections.append({"title": "å®Œæ•´æŠ¥å‘Š", "content": body})
+                report_sections.append({"title": "完整报告", "content": body})
             export_utils.write_docx(docx_path, title, body, report_sections)
         else:
             export_utils.write_docx(docx_path, title, body, sections or None)
-        artifacts.append(export_utils.artifact_record(docx_path.name, f"/exports/{docx_path.name}", "docx", "ä¸‹è½½ Word"))
+        artifacts.append(export_utils.artifact_record(docx_path.name, f"/exports/{docx_path.name}", "docx", "下载 Word"))
 
     if delivery == "pptx":
         pptx_path = EXPORT_DIR / f"{prefix}.pptx"
         slides = data.get("slides") or []
         if not slides and body:
-            slides = [{"title": "è®²è¯„æçº²", "bullets": [line[2:] for line in body.splitlines() if line.strip().startswith("- ")][:8]}]
+            slides = [{"title": "讲评提纲", "bullets": [line[2:] for line in body.splitlines() if line.strip().startswith("- ")][:8]}]
         export_utils.write_pptx(pptx_path, title, slides)
-        artifacts.append(export_utils.artifact_record(pptx_path.name, f"/exports/{pptx_path.name}", "pptx", "ä¸‹è½½ PowerPoint"))
+        artifacts.append(export_utils.artifact_record(pptx_path.name, f"/exports/{pptx_path.name}", "pptx", "下载 PowerPoint"))
 
     if delivery in {"docx", "pptx", "report", "map"}:
         md_path = EXPORT_DIR / f"{prefix}.md"
         export_utils.write_markdown(md_path, title, body)
-        artifacts.append(export_utils.artifact_record(md_path.name, f"/exports/{md_path.name}", "markdown", "ä¸‹è½½ Markdown"))
+        artifacts.append(export_utils.artifact_record(md_path.name, f"/exports/{md_path.name}", "markdown", "下载 Markdown"))
 
     if delivery == "map":
         html_path = EXPORT_DIR / f"{prefix}.html"
         export_utils.write_knowledge_map_html(html_path, title, data.get("nodes") or [], data.get("edges") or [])
-        artifacts.append(export_utils.artifact_record(html_path.name, f"/exports/{html_path.name}", "html", "æ‰“å¼€çŸ¥è¯†å›¾è°±"))
+        artifacts.append(export_utils.artifact_record(html_path.name, f"/exports/{html_path.name}", "html", "打开知识图谱"))
 
     if delivery == "image":
         md_path = EXPORT_DIR / f"{prefix}.md"
         export_utils.write_markdown(md_path, title, body or data.get("summary") or data.get("caption") or "")
-        artifacts.append(export_utils.artifact_record(md_path.name, f"/exports/{md_path.name}", "markdown", "ä¸‹è½½è¯´æ˜Ž Markdown"))
+        artifacts.append(export_utils.artifact_record(md_path.name, f"/exports/{md_path.name}", "markdown", "下载说明 Markdown"))
 
     image_prompt = (data.get("image_prompt") or "").strip()
     if delivery in {"image", "map"} and image_prompt:
@@ -2669,7 +3101,7 @@ def build_tool_artifacts(conn: sqlite3.Connection, tool: dict, run_id: str, data
         image_bytes = call_image_generation(image_model, image_prompt)
         image_path = EXPORT_DIR / f"{prefix}.png"
         image_path.write_bytes(image_bytes)
-        artifacts.append(export_utils.artifact_record(image_path.name, f"/exports/{image_path.name}", "image", "ä¸‹è½½é…å›¾ PNG"))
+        artifacts.append(export_utils.artifact_record(image_path.name, f"/exports/{image_path.name}", "image", "下载配图 PNG"))
 
     return artifacts, report
 
@@ -2679,48 +3111,48 @@ def portal_tool_prompt(tool: dict, subject: str, user_input: str) -> list[dict]:
     if delivery == "diagnose":
         delivery = "docx"
     mode_guides = {
-        "document": "æ•´ç†é¢˜å·/è¯•å·ä¸ºè§„èŒƒæ–‡æ¡£ç»“æž„ï¼Œä¿®æ­£ OCR æ¢è¡Œï¼Œä¿ç•™é¢˜å·ã€é€‰é¡¹ã€ç­”æ¡ˆåŒºã€è§£æžåŒºã€‚",
-        "analysis": "åŸºäºŽå®Œæ•´è¯•å·æˆ–ä½œç­”ææ–™ï¼Œè¾“å‡ºç¬¦åˆæ•™ç ”è§„èŒƒçš„å·é¢å­¦æƒ…è¯Šæ–­ï¼šæˆç»©æ¦‚è§ˆã€æ¨¡å—/é¢˜åž‹è¯Šæ–­ã€å¤±åˆ†å½’å› ã€åˆ†å±‚å»ºè®®ã€7æ—¥è¡ŒåŠ¨ã€‚",
-        "variant": "ç”ŸæˆåŒç»“æž„ã€æ¡ä»¶æ›¿æ¢ã€è¿ç§»æŒ‘æˆ˜ä¸‰ç±»å˜å¼é¢˜ï¼Œæ¯é¢˜å¸¦ç­”æ¡ˆä¸Žè§£æžã€‚",
-        "question": "å›´ç»•çŸ¥è¯†ç‚¹æ‰¹é‡å‘½é¢˜ï¼ŒæŒ‰åŸºç¡€/æé«˜/åŽ‹è½´åˆ†å±‚ï¼Œæ¯é¢˜å¸¦ç­”æ¡ˆã€è§£æžå’Œæ˜“é”™æé†’ã€‚",
-        "wrong": "å¯¹é”™é¢˜åšå½’å› ã€æ‹†é¢˜ã€åŒç±»é¢˜è¿ç§»å’Œå¤ç›˜å»ºè®®ã€‚",
-        "image": "æ ¹æ®æ•™å­¦éœ€æ±‚ç”Ÿæˆå¯ç›´æŽ¥ç”¨äºŽè¯¾å ‚çš„é…å›¾ï¼Œå¹¶ç»™å‡ºè¯¦ç»† image_promptã€‚",
-        "ppt": "ç”Ÿæˆå¯ç›´æŽ¥æŽˆè¯¾çš„è®²è¯„è¯¾ä»¶ï¼Œè‡³å°‘ 8 é¡µï¼Œå«å…¸åž‹é¢˜ã€äº’åŠ¨æé—®ã€è¯¾åŽç»ƒä¹ ä¸Žè®²è¯„å¤‡æ³¨ã€‚",
-        "review": "è¾“å‡ºå®¡é¢˜è®­ç»ƒæ–¹æ¡ˆï¼šå…³é”®è¯ã€éšå«æ¡ä»¶ã€è®¾é—®ç±»åž‹ã€é™·é˜±ã€ç¬¬ä¸€æ­¥åŠ¨ä½œä¸Žç»ƒä¹ é¢˜ã€‚",
-        "decompose": "æŠŠå¤§é¢˜æ‹†æˆé‡‡åˆ†ç‚¹ã€å…¬å¼/ææ–™ä¾æ®ã€æ­¥éª¤ã€æ˜“é”™ç‚¹å’Œç­”é¢˜æ¨¡æ¿ã€‚",
-        "english": "ç”Ÿæˆè¯æ±‡ç»ƒä¹ å·ï¼šè¯ä¹‰ã€æ‹¼å†™ã€è¯­å¢ƒå¡«ç©ºã€ç¿»è¯‘å’Œç­”æ¡ˆã€‚",
-        "coverage": "æ£€æµ‹è€ƒç‚¹è¦†ç›–ï¼šå·²è¦†ç›–ã€é—æ¼ã€é‡å¤ã€éš¾åº¦æ¯”ä¾‹å’Œè¡¥é¢˜å»ºè®®ã€‚",
-        "plan": "ç”Ÿæˆå†²åˆºè®¡åˆ’ï¼šç›®æ ‡ã€æ¯æ—¥ä»»åŠ¡ã€é”™é¢˜å¤ç›˜ã€è¾“å‡ºç‰©å’ŒéªŒæ”¶æ ‡å‡†ã€‚",
-        "notes": "æ•´ç†è¯¾å ‚ç¬”è®°ï¼šæ¦‚å¿µã€ä¾‹é¢˜ã€æ–¹æ³•ã€æ˜“é”™ç‚¹å’Œè¯¾åŽä»»åŠ¡ã€‚",
-        "preview": "ç”Ÿæˆé¢„ä¹ å•ï¼šé¢„ä¹ ç›®æ ‡ã€å…³é”®è¯ã€é—®é¢˜é“¾ã€ä»»åŠ¡å’Œæ£€æŸ¥ã€‚",
-        "loss": "åˆ†æžå¤±åˆ†åŽŸå› ï¼šçŸ¥è¯†ã€å®¡é¢˜ã€è¡¨è¾¾ã€è®¡ç®—ã€æ—¶é—´å’Œå¿ƒç†å› ç´ ï¼Œå¹¶ç»™ä¿®æ­£åŠ¨ä½œã€‚",
-        "sense": "è¾“å‡ºé¢˜æ„Ÿè®­ç»ƒï¼šåˆ¤åž‹ã€å…¥å£ã€å¸¸ç”¨æ¨¡åž‹å’Œæœ€å°éªŒè¯é¢˜ã€‚",
-        "map": "æž„å»ºçŸ¥è¯†ç‚¹å›¾è°±ï¼šèŠ‚ç‚¹ã€å…³ç³»é“¾ã€ä¾‹é¢˜å…¥å£ï¼Œå¹¶ç»™å‡ºå¯è§†åŒ– image_promptã€‚",
-        "multi": "ç»™å‡ºå¤šç§è§£æ³•/è§†è§’ï¼Œæ¯”è¾ƒé€‚ç”¨åœºæ™¯ã€ä¼˜ç¼ºç‚¹å’Œè¿ç§»å»ºè®®ã€‚",
-        "explain": "ç²¾è®²çŸ¥è¯†ç‚¹ï¼šå®šä¹‰ã€æ¯”å–»ã€ä¾‹é¢˜ã€è¯¯åŒºå’Œå°ç»ƒä¹ ã€‚",
-        "writing": "ä¼˜åŒ–ä½œæ–‡/è¡¨è¾¾ï¼šæ”¹è¯ã€å¥å¼å‡çº§ã€æ®µè½å»ºè®®å’Œè¯„åˆ†ç†ç”±ã€‚",
-        "score": "æ‹†è§£ç›®æ ‡åˆ†ï¼šåˆ†æ•°å·®è·ã€é¢˜åž‹æ”¶ç›Šã€æ¯æ—¥ç»ƒä¹ å’Œå¤ç›˜èŠ‚ç‚¹ã€‚",
+        "document": "整理题卷/试卷为规范文档结构，修正 OCR 换行，保留题号、选项、答案区、解析区。",
+        "analysis": "基于完整试卷或作答材料，输出符合教研规范的卷面学情诊断：成绩概览、模块/题型诊断、失分归因、分层建议、7日行动。",
+        "variant": "生成同结构、条件替换、迁移挑战三类变式题，每题带答案与解析。",
+        "question": "围绕知识点批量命题，按基础/提高/压轴分层，每题带答案、解析和易错提醒。",
+        "wrong": "对错题做归因、拆题、同类题迁移和复盘建议。",
+        "image": "根据教学需求生成可直接用于课堂的配图，并给出详细 image_prompt。",
+        "ppt": "生成可直接授课的讲评课件，至少 8 页，含典型题、互动提问、课后练习与讲评备注。",
+        "review": "输出审题训练方案：关键词、隐含条件、设问类型、陷阱、第一步动作与练习题。",
+        "decompose": "把大题拆成采分点、公式/材料依据、步骤、易错点和答题模板。",
+        "english": "生成词汇练习卷：词义、拼写、语境填空、翻译和答案。",
+        "coverage": "检测考点覆盖：已覆盖、遗漏、重复、难度比例和补题建议。",
+        "plan": "生成冲刺计划：目标、每日任务、错题复盘、输出物和验收标准。",
+        "notes": "整理课堂笔记：概念、例题、方法、易错点和课后任务。",
+        "preview": "生成预习单：预习目标、关键词、问题链、任务和检查。",
+        "loss": "分析失分原因：知识、审题、表达、计算、时间和心理因素，并给修正动作。",
+        "sense": "输出题感训练：判型、入口、常用模型和最小验证题。",
+        "map": "构建知识点图谱：节点、关系链、例题入口，并给出可视化 image_prompt。",
+        "multi": "给出多种解法/视角，比较适用场景、优缺点和迁移建议。",
+        "explain": "精讲知识点：定义、比喻、例题、误区和小练习。",
+        "writing": "优化作文/表达：改词、句式升级、段落建议和评分理由。",
+        "score": "拆解目标分：分数差距、题型收益、每日练习和复盘节点。",
     }
-    guide = mode_guides.get(tool.get("mode"), "ç”Ÿæˆå¯ç›´æŽ¥ç”¨äºŽæ•™å­¦æˆ–å­¦ä¹ çš„ç»“æž„åŒ–ç»“æžœã€‚")
+    guide = mode_guides.get(tool.get("mode"), "生成可直接用于教学或学习的结构化结果。")
     schema = structured_tool_schema(delivery)
-    system = f"""ä½ æ˜¯ AIé”™é¢˜æ‹†åšå£« çš„ä¸“ä¸šæ•™ç ”å¼•æ“Žã€‚å½“å‰å·¥å…·ï¼š{tool['label']}ã€‚
+    system = f"""你是 AI错题拆博士 的专业教研引擎。当前工具：{tool['label']}。
 
-è¦æ±‚ï¼š
-1. è¾“å‡ºå¿…é¡»æ˜¯åˆæ³• JSONï¼Œä¸è¦ Markdownï¼Œä¸è¦ä»£ç å—ï¼Œä¸è¦é¢å¤–è§£é‡Šã€‚
-2. å†…å®¹å¿…é¡»ç¬¦åˆ K12 / ä¸­è€ƒ / é«˜è€ƒ / æœ¬ç¡•åšè§£é¢˜è¾…å¯¼è§„èŒƒï¼Œå¯ç›´æŽ¥äº¤ä»˜æ•™å¸ˆã€å­¦ç”Ÿæˆ–å®¶é•¿ä½¿ç”¨ã€‚
-3. ç»“æž„å®Œæ•´ã€ç»“è®ºå…ˆè¡Œã€å»ºè®®å¯æ‰§è¡Œï¼›ç¦æ­¢ç©ºæ³›å¥—è¯ã€‚
-4. è‹¥ææ–™ä¸è¶³ï¼Œå¯åˆç†è¡¥å…¨å¹¶å†™å…¥ summaryã€‚
+要求：
+1. 输出必须是合法 JSON，不要 Markdown，不要代码块，不要额外解释。
+2. 内容必须符合 K12 / 中考 / 高考 / 本硕博解题辅导规范，可直接交付教师、学生或家长使用。
+3. 结构完整、结论先行、建议可执行；禁止空泛套话。
+4. 若材料不足，可合理补全并写入 summary。
 
-å·¥å…·ä»»åŠ¡ï¼š{guide}
+工具任务：{guide}
 
-JSON æ ¼å¼ï¼š
+JSON 格式：
 {schema}"""
-    user = f"""å­¦ç§‘/åœºæ™¯ï¼š{subject or 'è‡ªåŠ¨è¯†åˆ«'}
+    user = f"""学科/场景：{subject or '自动识别'}
 
-ç”¨æˆ·ææ–™ï¼š
+用户材料：
 {user_input}
 
-è¯·ä¸¥æ ¼æŒ‰ JSON æ ¼å¼è¾“å‡ºã€‚"""
+请严格按 JSON 格式输出。"""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -2728,13 +3160,13 @@ def run_portal_tool(conn: sqlite3.Connection, data: dict, user: dict | None) -> 
     tool_id = data.get("tool_id") or "knowledge-explain"
     tool = get_portal_tool(tool_id)
     if not tool:
-        raise ValueError("å·¥å…·ä¸å­˜åœ¨")
+        raise ValueError("工具不存在")
     if tool.get("delivery") == "diagnose":
-        raise ValueError("è¯¥å·¥å…·è¯·ä½¿ç”¨é”™é¢˜æ‹†è§£å·¥ä½œå°")
+        raise ValueError("该工具请使用错题拆解工作台")
     input_text = (data.get("input_text") or "").strip()
     if not input_text:
-        raise ValueError("è¯·å…ˆè¾“å…¥è¦å¤„ç†çš„é¢˜ç›®ã€è¯•å·ã€çŸ¥è¯†ç‚¹æˆ–å­¦ä¹ ææ–™")
-    subject = data.get("subject") or "è‡ªåŠ¨è¯†åˆ«"
+        raise ValueError("请先输入要处理的题目、试卷、知识点或学习材料")
+    subject = data.get("subject") or "自动识别"
     model = get_model(conn, data.get("model_id"))
     raw = minimax_chat(
         model,
@@ -2748,7 +3180,7 @@ def run_portal_tool(conn: sqlite3.Connection, data: dict, user: dict | None) -> 
     run_id = str(uuid.uuid4())
     artifacts, report = build_tool_artifacts(conn, tool, run_id, structured)
     if not artifacts:
-        raise RuntimeError("æœªèƒ½ç”Ÿæˆå¯ä¸‹è½½æ–‡ä»¶ï¼Œè¯·æ£€æŸ¥æ¨¡åž‹è¿”å›žå†…å®¹")
+        raise RuntimeError("未能生成可下载文件，请检查模型返回内容")
     user_id = user.get("id") if user else None
     created_at = now_iso()
     conn.execute(
@@ -2833,7 +3265,7 @@ def fallback_rag_score(query: str, content: str, subject: str = "") -> float:
     for i in range(max(0, len(q) - 1)):
         if q[i:i + 2] in c:
             score += 0.08
-    if subject and subject != "è‡ªåŠ¨è¯†åˆ«" and subject in content:
+    if subject and subject != "自动识别" and subject in content:
         score += 1.5
     return score
 
@@ -2853,8 +3285,8 @@ def public_rag_document(row: sqlite3.Row | dict) -> dict:
 
 def create_rag_document(conn: sqlite3.Connection, data: dict, user: dict | None) -> dict:
     filename = data.get("filename") or "paste.txt"
-    subject = clean_subject_name(data.get("subject") or "è‡ªåŠ¨è¯†åˆ«")
-    title = (data.get("title") or Path(filename).stem or "çŸ¥è¯†èµ„æ–™").strip()[:120]
+    subject = clean_subject_name(data.get("subject") or "自动识别")
+    title = (data.get("title") or Path(filename).stem or "知识资料").strip()[:120]
     text = (data.get("text") or "").strip()
     source_type = "paste"
     if data.get("file_data_url"):
@@ -2864,13 +3296,13 @@ def create_rag_document(conn: sqlite3.Connection, data: dict, user: dict | None)
         title = (data.get("title") or Path(filename).stem or title).strip()[:120]
         source_type = "file"
     if len(text) < 20:
-        raise ValueError("èµ„æ–™å†…å®¹å¤ªçŸ­ï¼Œæ— æ³•å…¥åº“æ£€ç´¢")
+        raise ValueError("资料内容太短，无法入库检索")
     doc_id = str(uuid.uuid4())
     user_id = user["id"] if user else None
     created_at = now_iso()
     chunks = chunk_text_for_rag(text)
     if not chunks:
-        raise ValueError("æœªèƒ½åˆ‡åˆ†å‡ºæœ‰æ•ˆçŸ¥è¯†ç‰‡æ®µ")
+        raise ValueError("未能切分出有效知识片段")
     conn.execute(
         """
         insert into rag_documents (id, user_id, title, filename, subject, source_type, chars, created_at)
@@ -2908,31 +3340,46 @@ def create_rag_document(conn: sqlite3.Connection, data: dict, user: dict | None)
     }
 
 
-def search_rag(conn: sqlite3.Connection, query: str, subject: str = "", user: dict | None = None, limit: int = 5) -> list[dict]:
+def search_rag(
+    conn: sqlite3.Connection,
+    query: str,
+    subject: str = "",
+    user: dict | None = None,
+    limit: int = 5,
+    source_type: str | None = None,
+) -> list[dict]:
+    if source_type == gaokao_rag.GAOKAO_RAG_SOURCE_TYPE:
+        return gaokao_rag.search_gaokao_rag(conn, query, limit)
     query = (query or "").strip()
     if not query:
         return []
     limit = max(1, min(int(limit or 5), 12))
-    subject = clean_subject_name(subject or "è‡ªåŠ¨è¯†åˆ«")
+    subject = clean_subject_name(subject or "自动识别")
     user_clause, params = rag_user_filter(user)
     base_where = user_clause.replace(" where ", "") if user_clause else "1=1"
+    source_sql = ""
+    source_params: list = []
+    if source_type:
+        source_sql = " and d.source_type = ?"
+        source_params.append(source_type)
     subject_sql = ""
     subject_params: list = []
-    if subject and subject != "è‡ªåŠ¨è¯†åˆ«":
-        subject_sql = " and (subject = ? or subject = 'è‡ªåŠ¨è¯†åˆ«' or subject is null or trim(subject) = '')"
+    if subject and subject != "自动识别":
+        subject_sql = " and (c.subject = ? or c.subject = '自动识别' or c.subject is null or trim(c.subject) = '')"
         subject_params.append(subject)
     candidates: list[dict] = []
     try:
         fts_query = " OR ".join(re.findall(r"[0-9A-Za-z_]+|[\u4e00-\u9fff]{2,}", query)) or query
         rows = conn.execute(
             f"""
-            select c.*, bm25(rag_chunks_fts) as rank
+            select c.*, d.source_type, bm25(rag_chunks_fts) as rank
             from rag_chunks_fts
             join rag_chunks c on c.id = rag_chunks_fts.chunk_id
-            where rag_chunks_fts match ? and {base_where}{subject_sql}
+            join rag_documents d on d.id = c.document_id
+            where rag_chunks_fts match ? and {base_where}{subject_sql}{source_sql}
             order by rank limit ?
             """,
-            [fts_query, *params, *subject_params, limit * 3],
+            [fts_query, *params, *subject_params, *source_params, limit * 3],
         ).fetchall()
         for row in rows:
             item = row_to_dict(row)
@@ -2942,8 +3389,14 @@ def search_rag(conn: sqlite3.Connection, query: str, subject: str = "", user: di
         candidates = []
     if len(candidates) < limit:
         rows = conn.execute(
-            f"select * from rag_chunks where {base_where}{subject_sql} order by created_at desc limit 200",
-            [*params, *subject_params],
+            f"""
+            select c.*, d.source_type
+            from rag_chunks c
+            join rag_documents d on d.id = c.document_id
+            where {base_where}{subject_sql}{source_sql}
+            order by c.created_at desc limit 200
+            """,
+            [*params, *subject_params, *source_params],
         ).fetchall()
         seen = {item.get("id") for item in candidates}
         fallback = []
@@ -2979,9 +3432,44 @@ def build_rag_context_for_prompt(chunks: list[dict]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
         blocks.append(
-            f"ã€èµ„æ–™{index}ï½œ{chunk.get('title') or 'çŸ¥è¯†ç‰‡æ®µ'}ï½œ{chunk.get('subject') or 'æœªæ ‡æ³¨'}ï½œç›¸å…³åº¦{chunk.get('score', 0)}ã€‘\n{compact_text(chunk.get('content'), 900)}"
+            f"【资料{index}｜{chunk.get('title') or '知识片段'}｜{chunk.get('subject') or '未标注'}｜相关度{chunk.get('score', 0)}】\n{compact_text(chunk.get('content'), 900)}"
         )
     return "\n\n".join(blocks)
+
+
+def retrieve_gaokao_evidence(
+    conn: sqlite3.Connection,
+    query: str,
+    subject: str = "自动识别",
+    *,
+    limit: int = 6,
+) -> tuple[list[dict], str]:
+    if not gaokao_rag.should_use_gaokao_rag(subject, query):
+        return [], ""
+    hits = gaokao_rag.search_gaokao_rag(conn, query, limit=limit)
+    return hits, gaokao_rag.build_gaokao_rag_context(hits)
+
+
+def merge_gaokao_search_results(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    zone: str = ZONE_GAOKAO_MATH,
+    limit: int = 8,
+) -> dict:
+    bank_hits = search_questions(conn, query, zone=zone, limit=limit)
+    bank_hits = rerank_hits(query, bank_hits, text_key="stem")
+    rag_hits = gaokao_rag.search_gaokao_rag(conn, query, limit=min(6, limit))
+    method_packages = search_question_method_packages(conn, query, limit=min(6, limit))
+    rag_context = gaokao_rag.build_gaokao_rag_context(rag_hits)
+    package_context = method_packages_context(method_packages)
+    return {
+        "bank_hits": bank_hits,
+        "rag_hits": rag_hits,
+        "method_packages": method_packages,
+        "rag_context": "\n\n".join(part for part in (rag_context, package_context) if part),
+        "citations": gaokao_rag.rag_citations_from_hits(rag_hits),
+    }
 
 
 def generate_rag_quiz_from_hits(topic: str, hits: list[dict], count: int = 5) -> dict:
@@ -3071,48 +3559,48 @@ def normalize_agent_result(result: dict, question_text: str, subject: str, stude
     quick = result.get("quick_answer") or {}
     result.setdefault("title", compact_text(structured.get("target") or result.get("question_type") or question_text, 42))
     result.setdefault("subject", subject_name)
-    result.setdefault("question_type", result.get("question_type") or "å¾…å½’çº³é¢˜åž‹")
+    result.setdefault("question_type", result.get("question_type") or "待归纳题型")
     result.setdefault("difficulty", 3)
     result.setdefault("confidence", 0.72)
     result["quick_answer"] = {
-        "how_to_decompose": quick.get("how_to_decompose") or "å…ˆè¯†åˆ«å­¦ç§‘ä¸Žé¢˜åž‹ï¼Œå†æ‹†å·²çŸ¥æ¡ä»¶ã€è®¾é—®ç›®æ ‡ã€å¯ç”¨æ¨¡åž‹ã€æ‰§è¡Œæ­¥éª¤å’Œæ ¡éªŒåŠ¨ä½œã€‚",
-        "make_it_easier": quick.get("make_it_easier") or "å…ˆåšä¸€ä¸ªæ›´å°çš„åŽŸåž‹é¢˜ï¼ŒæŠŠæ ¸å¿ƒæ­¥éª¤ç»ƒç†Ÿï¼Œå†è¿ç§»å›žåŽŸé¢˜ã€‚",
-        "first_entry": quick.get("first_entry") or result.get("question_type") or "é¢˜åž‹å…¥å£",
+        "how_to_decompose": quick.get("how_to_decompose") or "先识别学科与题型，再拆已知条件、设问目标、可用模型、执行步骤和校验动作。",
+        "make_it_easier": quick.get("make_it_easier") or "先做一个更小的原型题，把核心步骤练熟，再迁移回原题。",
+        "first_entry": quick.get("first_entry") or result.get("question_type") or "题型入口",
     }
     structured.setdefault("cleaned_question", question_text)
     structured.setdefault("known_conditions", [])
-    structured.setdefault("target", result.get("title") or "é¢˜ç›®ç›®æ ‡")
+    structured.setdefault("target", result.get("title") or "题目目标")
     structured.setdefault("hidden_constraints", [])
     structured.setdefault("student_work", student_answer or "")
     result["structured_question"] = structured
     answer_analysis = result.get("student_answer_analysis") or {}
-    answer_analysis.setdefault("answer_presence", "å·²æä¾›" if student_answer else "æœªæä¾›")
-    answer_analysis.setdefault("answer_status", "å¾…æ¨¡åž‹è¿›ä¸€æ­¥åˆ¤æ–­" if student_answer else "æœªæä¾›ä½œç­”")
-    answer_analysis.setdefault("likely_issue", "æ ¹æ®å­¦ç”Ÿä½œç­”å®šä½é”™å› " if student_answer else "æœªæä¾›ä½œç­”ï¼Œæš‚ä¸åˆ¤æ–­é”™å› ")
+    answer_analysis.setdefault("answer_presence", "已提供" if student_answer else "未提供")
+    answer_analysis.setdefault("answer_status", "待模型进一步判断" if student_answer else "未提供作答")
+    answer_analysis.setdefault("likely_issue", "根据学生作答定位错因" if student_answer else "未提供作答，暂不判断错因")
     answer_analysis.setdefault("evidence", [])
-    answer_analysis.setdefault("next_action", "å¯¹ç…§åˆ†å±‚æ­¥éª¤å¤ç›˜" if student_answer else "å¯è¡¥å……å­¦ç”Ÿä½œç­”åŽå†è¯Šæ–­")
+    answer_analysis.setdefault("next_action", "对照分层步骤复盘" if student_answer else "可补充学生作答后再诊断")
     result["student_answer_analysis"] = answer_analysis
     result.setdefault("solution_model", {
-        "model_name": "è¯†åˆ«é¢˜åž‹-æ‹†æ¡ä»¶-é€‰æ¨¡åž‹-æ‰§è¡Œ-æ ¡éªŒ-å¤ç›˜æ¨¡åž‹",
-        "applies_when": "é€‚ç”¨äºŽé«˜è€ƒå…¨ç§‘é¢˜ç›®çš„é€šç”¨æ‹†è§£",
-        "step_formula": "è¯†åˆ«é¢˜åž‹â†’æ‹†æ¡ä»¶â†’é€‰æ¨¡åž‹â†’æ‰§è¡Œâ†’æ ¡éªŒâ†’å¤ç›˜",
-        "steps": ["è¯†åˆ«å…¥å£", "æ‹†åˆ†æ¡ä»¶", "é€‰æ‹©æ¨¡åž‹", "è§„èŒƒä½œç­”", "åå‘æ ¡éªŒ"],
-        "checkpoints": ["ç­”æ¡ˆæ˜¯å¦å›žç­”è®¾é—®", "æ­¥éª¤æ˜¯å¦æœ‰ä¾æ®"],
+        "model_name": "识别题型-拆条件-选模型-执行-校验-复盘模型",
+        "applies_when": "适用于高考全科题目的通用拆解",
+        "step_formula": "识别题型→拆条件→选模型→执行→校验→复盘",
+        "steps": ["识别入口", "拆分条件", "选择模型", "规范作答", "反向校验"],
+        "checkpoints": ["答案是否回答设问", "步骤是否有依据"],
     })
     result.setdefault("multiple_solutions", [])
-    result.setdefault("standard_solution", "æ¨¡åž‹æœªè¿”å›žæ ‡å‡†è§£æžï¼Œè¯·é‡æ–°ç”Ÿæˆæˆ–è¡¥å……é¢˜å¹²ã€‚")
-    result.setdefault("final_answer", "æ¨¡åž‹æœªè¿”å›žæœ€ç»ˆç­”æ¡ˆã€‚")
+    result.setdefault("standard_solution", "模型未返回标准解析，请重新生成或补充题干。")
+    result.setdefault("final_answer", "模型未返回最终答案。")
     result.setdefault("score_points", [])
     result.setdefault("common_mistakes", [])
     result.setdefault("training_tasks", [])
     result.setdefault("mother_question_reserved", {
         "status": "prompt_reserved",
-        "name": result.get("question_type") or "é¢˜åž‹åŽŸåž‹å¾…æ²‰æ·€",
-        "abstract_pattern": "åŽç»­æŽ¥å…¥æ¯é¢˜åº“åŽæ²‰æ·€",
-        "future_interface_hint": "åŽç»­æŽ¥å…¥ /api/mother-questions æˆ– RAG",
+        "name": result.get("question_type") or "题型原型待沉淀",
+        "abstract_pattern": "后续接入母题库后沉淀",
+        "future_interface_hint": "后续接入 /api/mother-questions 或 RAG",
     })
-    result.setdefault("fun_analogy", {"theme": "æ‹†é¢˜è·¯çº¿å›¾", "overview": "æŠŠé¢˜ç›®å½“æˆä¸€æ¡ä»»åŠ¡æµæ°´çº¿é€å±‚æ‹†å¼€ã€‚", "steps": []})
-    result.setdefault("poem", {"title": "è§£é¢˜å¤ç›˜è¯€", "lines": [], "line_reviews": []})
+    result.setdefault("fun_analogy", {"theme": "拆题路线图", "overview": "把题目当成一条任务流水线逐层拆开。", "steps": []})
+    result.setdefault("poem", {"title": "解题复盘诀", "lines": [], "line_reviews": []})
     result.setdefault("archive_payload", {
         "subject": subject_name,
         "question": question_text,
@@ -3120,7 +3608,7 @@ def normalize_agent_result(result: dict, question_text: str, subject: str, stude
         "analysis": result.get("standard_solution"),
         "detailed_thinking": result.get("quick_answer", {}).get("how_to_decompose"),
         "similar_questions": [task.get("stem") for task in result.get("training_tasks", []) if isinstance(task, dict) and task.get("stem")],
-        "tags": [result.get("question_type") or "é¢˜åž‹å¾…å½’çº³"],
+        "tags": [result.get("question_type") or "题型待归纳"],
     })
 
     existing_layers = {}
@@ -3138,44 +3626,49 @@ def normalize_agent_result(result: dict, question_text: str, subject: str, stude
             "input": layer.get("input") or compact_text(question_text, 120),
             "output": layer.get("output") or layer.get("summary") or template["role"],
             "quality_gate": layer.get("quality_gate") or template["quality_gate"],
-            "next_action": layer.get("next_action") or "è¿›å…¥ä¸‹ä¸€å±‚å¤„ç†",
+            "next_action": layer.get("next_action") or "进入下一层处理",
         })
     result["layers"] = normalized_layers
     return _replace_placeholder_tree(repair_text_tree(result))
 
 
 def agent_prompt_messages(subject: str, question_text: str, student_answer: str, rag_context: str = "") -> list[dict]:
-    layer_spec = "\n".join(f"- {layer['key']}: {layer['name']}ï½œ{layer['role']}ï½œè´¨æ£€ï¼š{layer['quality_gate']}" for layer in AGENT_LAYERS)
-    user = f"""å­¦ç§‘ï¼š{subject or 'è‡ªåŠ¨è¯†åˆ«'}
+    layer_spec = "\n".join(f"- {layer['key']}: {layer['name']}｜{layer['role']}｜质检：{layer['quality_gate']}" for layer in AGENT_LAYERS)
+    user = f"""学科：{subject or '自动识别'}
 
-é¢˜ç›®ï¼š
+题目：
 {question_text}
 
-å­¦ç”Ÿä½œç­”/æ‰¹æ³¨/å¡ç‚¹ï¼š
-{student_answer or 'æœªæä¾›'}
+学生作答/批注/卡点：
+{student_answer or '未提供'}
 
-RAG æ£€ç´¢èµ„æ–™ï¼š
-{rag_context or 'æœªå¯ç”¨æˆ–æœªæ£€ç´¢åˆ°ç›¸å…³èµ„æ–™ã€‚'}
+RAG 检索资料：
+{rag_context or '未启用或未检索到相关资料。'}
 
-è¦æ±‚ï¼šå¦‚æžœ RAG æ£€ç´¢èµ„æ–™ä¸ä¸ºç©ºï¼Œè¯·ä¼˜å…ˆæŠŠèµ„æ–™ä½œä¸ºä¾æ®ï¼Œä½†å¿…é¡»è‡ªè¡Œæ ¡éªŒèµ„æ–™æ˜¯å¦é€‚ç”¨äºŽæœ¬é¢˜ï¼›è‹¥èµ„æ–™ä¸Žé¢˜ç›®å†²çªï¼Œè¦è¯´æ˜Žâ€œèµ„æ–™ä¸é€‚ç”¨/éœ€è°¨æ…Žâ€ã€‚è¾“å‡º JSON ä¸­å¿…é¡»å†™å…¥ rag_context å­—æ®µï¼ŒåŒ…å« usedã€evidence_countã€citationsã€how_usedã€‚
+要求：如果 RAG 检索资料不为空，请优先把资料作为依据，但必须自行校验资料是否适用于本题；若资料与题目冲突，要说明“资料不适用/需谨慎”。输出 JSON 中必须写入 rag_context 字段，包含 used、evidence_count、citations、how_used。
 
-æ™ºèƒ½ä½“å±‚æ¬¡æ¸…å•ï¼š
+智能体层次清单：
 {layer_spec}
 
-è¯·ä¸¥æ ¼æŒ‰ AGENT_SOLVE_PROMPT çš„ JSON æ ¼å¼è¾“å‡ºã€‚"""
+请严格按 AGENT_SOLVE_PROMPT 的 JSON 格式输出。"""
     return [{"role": "system", "content": AGENT_SOLVE_PROMPT}, {"role": "user", "content": user}]
 
 
 def solve_with_agent(conn: sqlite3.Connection, data: dict, user: dict | None) -> dict:
     question_text = (data.get("question_text") or "").strip()
     if not question_text:
-        raise ValueError("è¯·å…ˆè¾“å…¥é¢˜ç›®å†…å®¹")
-    subject = (data.get("subject") or "è‡ªåŠ¨è¯†åˆ«").strip()
+        raise ValueError("请先输入题目内容")
+    subject = (data.get("subject") or "自动识别").strip()
     student_answer = (data.get("student_answer") or data.get("student_wrong_answer") or "").strip()
     model = get_model(conn, data.get("model_id"))
     use_rag = data.get("use_rag", True) is not False
-    rag_hits = search_rag(conn, "\n".join([subject, question_text, student_answer]), subject, user, int(data.get("rag_limit") or 5)) if use_rag else []
-    rag_context = build_rag_context_for_prompt(rag_hits)
+    rag_hits: list[dict] = []
+    if use_rag:
+        if gaokao_rag.should_use_gaokao_rag(subject, question_text):
+            rag_hits = gaokao_rag.search_gaokao_rag(conn, "\n".join([subject, question_text, student_answer]), int(data.get("rag_limit") or 6))
+        if not rag_hits:
+            rag_hits = search_rag(conn, "\n".join([subject, question_text, student_answer]), subject, user, int(data.get("rag_limit") or 5))
+    rag_context = gaokao_rag.build_gaokao_rag_context(rag_hits) if rag_hits and rag_hits[0].get("source") == "gaokao_rag" else build_rag_context_for_prompt(rag_hits)
     raw = minimax_chat(
         model,
         agent_prompt_messages(subject, question_text, student_answer, rag_context),
@@ -3197,7 +3690,7 @@ def solve_with_agent(conn: sqlite3.Connection, data: dict, user: dict | None) ->
             }
             for item in rag_hits
         ],
-        "how_used": structured.get("rag_context", {}).get("how_used") if isinstance(structured.get("rag_context"), dict) else "å·²ä½œä¸ºè§£é¢˜ä¾æ®æ³¨å…¥æç¤ºè¯" if rag_hits else "æœªæ£€ç´¢åˆ°å¯ç”¨èµ„æ–™",
+        "how_used": structured.get("rag_context", {}).get("how_used") if isinstance(structured.get("rag_context"), dict) else "已作为解题依据注入提示词" if rag_hits else "未检索到可用资料",
     }
     run_id = str(uuid.uuid4())
     created_at = now_iso()
@@ -3276,8 +3769,8 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
         item = row_to_dict(row)
         diagnosis = item.get("diagnosis") or {}
         items.append(history_item(
-            f"diagnosis:{item['id']}", "diagnosis", "AIæ‹†é¢˜",
-            diagnosis.get("core_pattern") or diagnosis.get("topic") or "é¢˜ç›®æ‹†è§£",
+            f"diagnosis:{item['id']}", "diagnosis", "AI拆题",
+            diagnosis.get("core_pattern") or diagnosis.get("topic") or "题目拆解",
             item.get("corrected_text") or "", item.get("created_at"),
             wrong_question_id=item["id"], subject=clean_subject_name(diagnosis.get("subject")), status=item.get("status"),
             institution_id=item.get("institution_id"), institution_name=item.get("institution_name"), institution_badge=item.get("institution_badge"),
@@ -3291,8 +3784,8 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
         variant = row_to_dict(row)
         diagnosis = variant.get("diagnosis") or {}
         items.append(history_item(
-            f"variant:{variant['id']}", "variant", "åŒç±»å˜å¼",
-            f"ç¬¬ {variant.get('level')} é¢˜ï¼š{variant.get('title')}", variant.get("stem") or "", variant.get("created_at"),
+            f"variant:{variant['id']}", "variant", "同类变式",
+            f"第 {variant.get('level')} 题：{variant.get('title')}", variant.get("stem") or "", variant.get("created_at"),
             wrong_question_id=variant.get("wrong_question_id"), subject=clean_subject_name(diagnosis.get("subject")),
         ))
     for row in conn.execute(f"""
@@ -3307,7 +3800,7 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
         grading = answer.get("grading_result") or {}
         diagnosis = answer.get("diagnosis") or {}
         items.append(history_item(
-            f"grading:{answer['id']}", "grading", "AIæ‰¹æ”¹", answer.get("title") or "å˜å¼æ‰¹æ”¹",
+            f"grading:{answer['id']}", "grading", "AI批改", answer.get("title") or "变式批改",
             grading.get("comment") or grading.get("detected_issue") or answer.get("answer_text") or "", answer.get("submitted_at"),
             wrong_question_id=answer.get("wrong_question_id"), subject=clean_subject_name(diagnosis.get("subject")),
             score=grading.get("score"), is_correct=bool(answer.get("is_correct")),
@@ -3321,9 +3814,9 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
         card = row_to_dict(row)
         diagnosis = card.get("diagnosis") or {}
         items.append(history_item(
-            f"card:{card['id']}", "card", "å­¦ä¹ å¡ç‰‡",
-            diagnosis.get("core_pattern") or diagnosis.get("topic") or "é”™é¢˜è®­ç»ƒå¡",
-            f"{card.get('model')} Â· {card.get('size')} Â· {card.get('quality')}", card.get("created_at"),
+            f"card:{card['id']}", "card", "学习卡片",
+            diagnosis.get("core_pattern") or diagnosis.get("topic") or "错题训练卡",
+            f"{card.get('model')} · {card.get('size')} · {card.get('quality')}", card.get("created_at"),
             wrong_question_id=card.get("wrong_question_id"), subject=clean_subject_name(diagnosis.get("subject")), image_url=card.get("image_url"),
         ))
     for row in conn.execute(
@@ -3332,7 +3825,7 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
     ).fetchall():
         run = row_to_dict(row)
         items.append(history_item(
-            f"tool:{run['id']}", "tool", run.get("tool_label") or "AIå·¥å…·", run.get("tool_label") or "å·¥å…·ç”Ÿæˆ",
+            f"tool:{run['id']}", "tool", run.get("tool_label") or "AI工具", run.get("tool_label") or "工具生成",
             run.get("output_text") or run.get("input_text") or "", run.get("created_at"),
             tool_run_id=run.get("id"), tool_id=run.get("tool_id"), subject=clean_subject_name(run.get("subject")),
         ))
@@ -3344,7 +3837,7 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
         result = run.get("result") or {}
         quick = result.get("quick_answer") or {}
         items.append(history_item(
-            f"agent:{run['id']}", "agent", "è§£é¢˜æ™ºèƒ½ä½“", result.get("title") or result.get("question_type") or "åˆ†å±‚è§£é¢˜",
+            f"agent:{run['id']}", "agent", "解题智能体", result.get("title") or result.get("question_type") or "分层解题",
             quick.get("how_to_decompose") or result.get("standard_solution") or run.get("question_text") or "",
             run.get("created_at"),
             agent_run_id=run.get("id"), subject=clean_subject_name(result.get("subject") or run.get("subject")),
@@ -3356,8 +3849,8 @@ def build_generation_history(conn: sqlite3.Connection, user: dict | None) -> dic
     ).fetchall():
         export = row_to_dict(row)
         items.append(history_item(
-            f"profile_export:{export['id']}", "profile_export", "æ¡£æ¡ˆå¯¼å‡º", export.get("filename") or "ä¸ªäººå­¦ä¹ æ¡£æ¡ˆ",
-            f"{export.get('subject')} Â· {export.get('count')} é“é¢˜", export.get("created_at"),
+            f"profile_export:{export['id']}", "profile_export", "档案导出", export.get("filename") or "个人学习档案",
+            f"{export.get('subject')} · {export.get('count')} 道题", export.get("created_at"),
             export_id=export.get("id"), subject=clean_subject_name(export.get("subject")),
         ))
     items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
@@ -3386,7 +3879,7 @@ def institution_context_for_app_user(user: dict | None) -> dict:
 def masked_email(value: str | None) -> str:
     email = (value or "").strip()
     if "@" not in email:
-        return "å­¦ä¹ è€…"
+        return "学习者"
     name, domain = email.split("@", 1)
     if len(name) <= 2:
         shown = name[:1] + "*"
@@ -3405,7 +3898,7 @@ def public_profile_share(row: sqlite3.Row | dict) -> dict:
         "id": item.get("id"),
         "token": item.get("token"),
         "title": item.get("title"),
-        "audience": item.get("audience") or "å®¶æ•™/å®¶é•¿/æ•™åŠ¡",
+        "audience": item.get("audience") or "家教/家长/教务",
         "note": item.get("note") or "",
         "status": item.get("status"),
         "permissions": permissions,
@@ -3417,9 +3910,9 @@ def public_profile_share(row: sqlite3.Row | dict) -> dict:
 
 def create_profile_share(conn: sqlite3.Connection, data: dict, user: dict | None) -> dict:
     if not user:
-        raise PermissionError("è¯·å…ˆç™»å½•åŽå†åˆ›å»ºå…±äº«é“¾æŽ¥")
-    title = (data.get("title") or "å­¦ä¹ çŠ¶æ€å…±äº«").strip()[:80]
-    audience = (data.get("audience") or "å®¶æ•™/å®¶é•¿/æ•™åŠ¡").strip()[:80]
+        raise PermissionError("请先登录后再创建共享链接")
+    title = (data.get("title") or "学习状态共享").strip()[:80]
+    audience = (data.get("audience") or "家教/家长/教务").strip()[:80]
     note = (data.get("note") or "").strip()[:300]
     permissions = data.get("permissions") or {
         "report": True,
@@ -3466,10 +3959,10 @@ def revoke_profile_share(conn: sqlite3.Connection, share_id: str, user: dict | N
         raise PermissionError("unauthorized")
     row = conn.execute("select * from profile_shares where id = ?", (share_id,)).fetchone()
     if not row:
-        raise ValueError("å…±äº«é“¾æŽ¥ä¸å­˜åœ¨")
+        raise ValueError("共享链接不存在")
     item = dict(row)
     if not user_is_admin(user) and item.get("user_id") != user.get("id"):
-        raise PermissionError("æ— æƒæ“ä½œè¯¥å…±äº«é“¾æŽ¥")
+        raise PermissionError("无权操作该共享链接")
     conn.execute("update profile_shares set status = ? where id = ?", ("revoked", share_id))
     row = conn.execute("select * from profile_shares where id = ?", (share_id,)).fetchone()
     return public_profile_share(row)
@@ -3478,16 +3971,16 @@ def revoke_profile_share(conn: sqlite3.Connection, share_id: str, user: dict | N
 def build_public_share_payload(conn: sqlite3.Connection, token: str, viewer: dict | None = None) -> dict:
     row = conn.execute("select * from profile_shares where token = ?", (token,)).fetchone()
     if not row:
-        raise ValueError("å…±äº«é“¾æŽ¥ä¸å­˜åœ¨")
+        raise ValueError("共享链接不存在")
     share = public_profile_share(row)
     if share.get("status") != "active":
-        raise PermissionError("å…±äº«é“¾æŽ¥å·²å…³é—­")
+        raise PermissionError("共享链接已关闭")
     expires_at = (share.get("expires_at") or "").strip()
     if expires_at and expires_at < now_iso():
-        raise PermissionError("å…±äº«é“¾æŽ¥å·²è¿‡æœŸ")
+        raise PermissionError("共享链接已过期")
     owner = conn.execute("select * from app_users where id = ?", (dict(row).get("user_id"),)).fetchone()
     if not owner:
-        raise ValueError("å…±äº«ç”¨æˆ·ä¸å­˜åœ¨")
+        raise ValueError("共享用户不存在")
     user = public_user(owner)
     conn.execute("update profile_shares set last_viewed_at = ? where token = ?", (now_iso(), token))
     permissions = share.get("permissions") or {}
@@ -3527,7 +4020,7 @@ def build_public_share_payload(conn: sqlite3.Connection, token: str, viewer: dic
             {
                 "id": item.get("id"),
                 "subject": clean_subject_name((item.get("diagnosis") or {}).get("subject")),
-                "title": (item.get("diagnosis") or {}).get("core_pattern") or (item.get("diagnosis") or {}).get("topic") or "é¢˜ç›®æ¡£æ¡ˆ",
+                "title": (item.get("diagnosis") or {}).get("core_pattern") or (item.get("diagnosis") or {}).get("topic") or "题目档案",
                 "question": compact_text(item.get("corrected_text"), 180),
                 "status": item.get("status"),
                 "created_at": item.get("created_at"),
@@ -3560,14 +4053,14 @@ def test_model_connection(conn: sqlite3.Connection, model_id: str) -> dict:
     try:
         sample = minimax_chat(
             model,
-            [{"role": "user", "content": "è¯·åªå›žå¤ OKã€‚"}],
+            [{"role": "user", "content": "请只回复 OK。"}],
             max_tokens=16,
             temperature=0,
         )
         return {
             "ok": True,
             "model_id": model_id,
-            "message": "è¿žæŽ¥æˆåŠŸ",
+            "message": "连接成功",
             "sample": compact_text(sample, 80),
         }
     except Exception as exc:
@@ -3581,9 +4074,9 @@ def test_model_connection(conn: sqlite3.Connection, model_id: str) -> dict:
 def update_model_api_key(conn: sqlite3.Connection, model_id: str, api_key: str) -> dict:
     row = conn.execute("select * from model_configs where id = ?", (model_id,)).fetchone()
     if not row:
-        raise ValueError("æ¨¡åž‹ä¸å­˜åœ¨")
+        raise ValueError("模型不存在")
     if not api_key.strip():
-        raise ValueError("API Key ä¸èƒ½ä¸ºç©º")
+        raise ValueError("API Key 不能为空")
     conn.execute(
         "update model_configs set api_key = ?, updated_at = ? where id = ?",
         (api_key.strip(), now_iso(), model_id),
@@ -3595,9 +4088,9 @@ def update_model_api_key(conn: sqlite3.Connection, model_id: str, api_key: str) 
 def update_image_model_api_key(conn: sqlite3.Connection, model_id: str, api_key: str) -> dict:
     row = conn.execute("select * from image_model_configs where id = ?", (model_id,)).fetchone()
     if not row:
-        raise ValueError("å›¾ç‰‡æ¨¡åž‹ä¸å­˜åœ¨")
+        raise ValueError("图片模型不存在")
     if not api_key.strip():
-        raise ValueError("API Key ä¸èƒ½ä¸ºç©º")
+        raise ValueError("API Key 不能为空")
     conn.execute(
         "update image_model_configs set api_key = ?, updated_at = ? where id = ?",
         (api_key.strip(), now_iso(), model_id),
@@ -3654,19 +4147,38 @@ def normalize_ocr_image_data_url(image_data_url: str, max_long_side: int = 2200)
         return image_data_url, {**metadata, "reason": "preprocess_failed", "error": compact_text(exc, 160)}
 
 
-def run_paper_ocr(image_data_url: str, model_id: str | None = None) -> dict:
+def run_paper_ocr(image_data_url: str, model_id: str | None = None, *, handwriting: bool = True) -> dict:
     with db() as conn:
         model = get_vision_model(conn, model_id)
-    normalized_image, image_metadata = normalize_ocr_image_data_url(image_data_url)
-    content = [
-        {"type": "text", "text": PAPER_OCR_PROMPT},
-        {"type": "image_url", "image_url": {"url": normalized_image, "detail": "high", "max_long_side_pixel": 2200}},
-    ]
-    raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=7000, temperature=0.1)
-    result = parse_paper_ocr_response(raw)
-    result["raw_response_preview"] = compact_text(raw, 600)
-    result["image_preprocessing"] = image_metadata
-    return result
+        ocr_prompt = merge_handwriting_prompt(PAPER_OCR_PROMPT, handwriting)
+    normalized_image, image_metadata = normalize_ocr_image_data_url(image_data_url, max_long_side=2400)
+    if handwriting:
+        enhanced_image, enhanced_meta = preprocess_for_handwriting(normalized_image, max_long_side=2600)
+        image_metadata = {"base": image_metadata, "enhanced": enhanced_meta}
+        candidates = [normalized_image, enhanced_image]
+    else:
+        candidates = [normalized_image]
+    best_result = None
+    best_score = -1.0
+    best_raw = ""
+    for index, candidate in enumerate(candidates):
+        content = [
+            {"type": "text", "text": ocr_prompt},
+            {"type": "image_url", "image_url": {"url": candidate, "detail": "high", "max_long_side_pixel": 2600 if handwriting else 2200}},
+        ]
+        raw = minimax_chat(model, [{"role": "user", "content": content}], max_tokens=7000, temperature=0.08)
+        result = parse_paper_ocr_response(raw)
+        score = ocr_quality_score(result)
+        if score > best_score:
+            best_score = score
+            best_result = result
+            best_raw = raw
+            best_result["recognition_variant"] = "enhanced" if index else "base"
+    best_result = best_result or {"questions": [], "page_text": "", "page_confidence": 0}
+    best_result["raw_response_preview"] = compact_text(best_raw, 600)
+    best_result["image_preprocessing"] = image_metadata
+    best_result["handwriting_mode"] = handwriting
+    return best_result
 
 
 def ocr_quality_score(result: dict) -> float:
@@ -3752,6 +4264,96 @@ def ensure_gaokao_mother_catalog(conn: sqlite3.Connection) -> None:
             f"insert into mother_questions ({','.join(names)}) values ({','.join('?' for _ in names)})",
             [values[name] for name in names],
         )
+
+
+def insert_reserved_mother_question(
+    conn: sqlite3.Connection,
+    wrong_id: str,
+    reserved: dict,
+    diagnosis: dict,
+) -> None:
+    """Best-effort reserved mother insert; never block diagnosis save."""
+    if not reserved.get("name"):
+        return
+    if reserved.get("status") in {"search_matched", "search_fast_path"}:
+        return
+    columns = {row["name"] for row in conn.execute("pragma table_info(mother_questions)").fetchall()}
+    if not columns:
+        return
+    code = str(reserved.get("code") or reserved.get("name") or f"RES-{wrong_id[:8]}")[:120]
+    if conn.execute("select 1 from mother_questions where code = ? limit 1", (code,)).fetchone():
+        return
+    topic = str(
+        diagnosis.get("core_pattern") or diagnosis.get("topic") or reserved.get("name") or "待归纳题型"
+    ).strip()
+    values = {
+        "id": str(uuid.uuid4()),
+        "code": code,
+        "name": str(reserved.get("name") or "预留母题"),
+        "topic": topic,
+        "difficulty": int(reserved.get("difficulty") or 3),
+        "recognition_signals": json.dumps(reserved.get("recognition_signals") or [], ensure_ascii=False),
+        "knowledge_points": json.dumps(reserved.get("knowledge_points") or [], ensure_ascii=False),
+        "solution_steps": json.dumps(reserved.get("solution_steps") or [], ensure_ascii=False),
+        "common_error_causes": json.dumps(reserved.get("common_error_causes") or [], ensure_ascii=False),
+        "mnemonic": str(reserved.get("mnemonic") or reserved.get("abstract_pattern") or ""),
+        "status": str(reserved.get("status") or "prompt_reserved"),
+        "metadata": json.dumps(reserved, ensure_ascii=False),
+        "created_at": now_iso(),
+    }
+    names = [name for name in values if name in columns]
+    if not names:
+        return
+    conn.execute(
+        f"insert into mother_questions ({','.join(names)}) values ({','.join('?' for _ in names)})",
+        [values[name] for name in names],
+    )
+
+
+def build_answer_verdict(question_text: str, wrong_answer: str, diagnosis: dict | None = None) -> dict:
+    """First-screen verdict: did the student get it right?"""
+    diagnosis = diagnosis or {}
+    analysis = diagnosis.get("student_answer_analysis") if isinstance(diagnosis.get("student_answer_analysis"), dict) else {}
+    standard = diagnosis.get("standard_answer") if isinstance(diagnosis.get("standard_answer"), dict) else {}
+    student = (wrong_answer or analysis.get("extracted_work") or "").strip()
+    final = str(standard.get("final_answer") or "").strip()
+    status_text = " ".join(
+        str(x or "")
+        for x in (
+            analysis.get("answer_status"),
+            analysis.get("likely_issue"),
+            analysis.get("error_type"),
+            diagnosis.get("answer_state"),
+        )
+    )
+    if not student:
+        return {
+            "status": "blank",
+            "label": "未作答 / 未识别到手写",
+            "score_hint": "没有读到学生作答。请确认手写区域清晰，或在「学生作答」里粘贴答案；无论对错都会给出讲解。",
+            "student_answer": "",
+            "standard_answer_preview": final[:240],
+            "skip_error_step": True,
+        }
+    lowered = status_text.lower()
+    if any(k in status_text for k in ("正确", "做对", "全对", "答案正确", "完全正确")) and "不正" not in status_text and "错误" not in status_text:
+        status, label, hint = "correct", "做对了", "作答与标准结论一致。仍建议过一遍思路与同类巩固，防止碰巧蒙对。"
+    elif any(k in status_text for k in ("部分正确", "半对", "部分得分", "漏步")):
+        status, label, hint = "partial", "部分正确", "结论或步骤有得分点，但仍有断点。下一步会专门拆错因。"
+    elif any(k in status_text for k in ("错误", "做错", "不对", "失分", "未做对", "概念混淆", "knowledge_gap", "concept_confusion")):
+        status, label, hint = "wrong", "做错了", "已对照标准路径判定为未完全做对。下一步拆清错因，再讲正确思路。"
+    elif final and student and final[:40] in student:
+        status, label, hint = "correct", "做对了（初步）", "学生作答包含标准结论片段；仍建议核对完整步骤。"
+    else:
+        status, label, hint = "unknown", "待核对", "已读到学生作答，但置信度不足以自动判分。请结合标准答案与讲解自行确认。"
+    return {
+        "status": status,
+        "label": label,
+        "score_hint": hint,
+        "student_answer": student[:800],
+        "standard_answer_preview": final[:240],
+        "skip_error_step": status == "correct",
+    }
 
 
 def enrich_gaokao_diagnosis(question: dict, diagnosis: dict, subject: str) -> dict:
@@ -3854,76 +4456,87 @@ def persist_wrong_from_paper(conn: sqlite3.Connection, paper_id: str, question_i
     return wrong_id
 
 
-def process_paper_job(paper_id: str, model_id: str | None = None) -> None:
+def get_fast_diagnose_model(conn: sqlite3.Connection, model_id: str | None = None) -> dict:
+    if model_id:
+        return get_model(conn, model_id)
+    for preferred in ("fenno-gpt-default", "minimax-m3-default"):
+        row = conn.execute("select * from model_configs where id = ? and api_key != ''", (preferred,)).fetchone()
+        if row:
+            return row_to_dict(row)
+    return get_model(conn, None)
+
+
+def quick_diagnose_with_llm(
+    question_text: str,
+    wrong_answer: str = "",
+    ocr_text: str = "",
+    model_id: str | None = None,
+    subject: str = "自动识别",
+    rag_context: str = "",
+) -> dict:
+    with db() as conn:
+        model = get_fast_diagnose_model(conn, model_id)
+    user_text = f"""学科：{subject}
+题干：{question_text}
+OCR：{ocr_text or "(无)"}
+学生作答/错解：{wrong_answer or "(未提供)"}
+参考资料：{rag_context[:1200] if rag_context else "(无)"}"""
+    try:
+        raw = minimax_chat(
+            model,
+            [{"role": "system", "content": QUICK_DIAGNOSE_PROMPT}, {"role": "user", "content": user_text}],
+            max_tokens=1800,
+            temperature=0.2,
+            timeout=35,
+        )
+        result = extract_json(raw)
+        result.setdefault("subject", subject)
+        result.setdefault("confidence", 0.78)
+        result.setdefault("core_pattern", "待归纳题型")
+        result["gaokao_rag"] = {"used": bool(rag_context), "mode": "quick_llm"}
+        return result
+    except Exception:
+        return build_skeleton_diagnosis(question_text, wrong_answer, subject)
+
+
+def generate_eliminate_variants(
+    question_text: str,
+    wrong_answer: str,
+    diagnosis: dict,
+    model_id: str | None = None,
+    subject: str = "自动识别",
+    *,
+    use_llm: bool = False,
+) -> list[dict]:
+    core = diagnosis.get("core_pattern") or diagnosis.get("topic") or "同类母题"
+    fallback = fallback_eliminate_variants(question_text, core, wrong_answer)
+    if not use_llm:
+        return fallback
     try:
         with db() as conn:
-            ensure_gaokao_mother_catalog(conn)
-            paper = conn.execute("select * from exam_papers where id = ?", (paper_id,)).fetchone()
-            pages = conn.execute("select * from paper_pages where paper_id = ? order by page_no", (paper_id,)).fetchall()
-            conn.execute("update exam_papers set status='processing',progress=2,updated_at=? where id=?", (now_iso(), paper_id))
-            conn.execute("update paper_jobs set status='processing',progress=2,attempts=attempts+1,updated_at=? where paper_id=?", (now_iso(), paper_id))
-        extracted = []
-        for index, page in enumerate(pages, start=1):
-            if page["source_url"]:
-                result = best_of_two_paper_ocr(image_url_to_data_url(page["source_url"]), model_id)
-                questions = result.get("questions") or []
-            else:
-                source_text = validate_paper_source_text(page["source_text"] or "")
-                result = {"page_text": source_text, "page_confidence": 0.82, "parse_mode": "document_text"}
-                questions = split_numbered_questions(source_text)
-            with db() as conn:
-                conn.execute("update paper_pages set ocr_result=?,confidence=? where id=?", (json.dumps(result, ensure_ascii=False), float(result.get("page_confidence") or 0), page["id"]))
-            for question in questions:
-                question["page_id"] = page["id"]
-                extracted.append(question)
-            progress = min(45, round(index / max(1, len(pages)) * 45))
-            with db() as conn:
-                conn.execute("update exam_papers set progress=?,updated_at=? where id=?", (progress, now_iso(), paper_id))
-                conn.execute("update paper_jobs set progress=?,updated_at=? where paper_id=?", (progress, now_iso(), paper_id))
-        for index, question in enumerate(extracted, start=1):
-            state = normalize_answer_state(question.get("answer_state"), question.get("score"), question.get("max_score"))
-            confidence = float(question.get("confidence") or 0.55)
-            review_required = state == "review_required" or confidence < 0.72
-            diagnosis = {}
-            steps = []
-            wrong_id = None
-            if state != "correct":
-                try:
-                    diagnosis = diagnose_with_llm(question.get("printed_text") or "", question.get("student_work") or question.get("teacher_marks") or "", "", model_id, paper["subject"] or "自动识别")
-                except Exception as exc:
-                    diagnosis = fallback_paper_diagnosis(question, exc)
-                    review_required = True
-                diagnosis = enrich_gaokao_diagnosis(question, diagnosis, paper["subject"] or "自动识别")
-                steps = build_eight_steps(diagnosis, question)
-            qid = str(uuid.uuid4())
-            with db() as conn:
-                if state != "correct":
-                    wrong_id = persist_wrong_from_paper(conn, paper_id, qid, paper["user_id"], {**question, "review_required": review_required}, diagnosis)
-                conn.execute(
-                    """insert into paper_questions
-                    (id,paper_id,page_id,question_no,printed_text,student_work,teacher_marks,answer_state,score,max_score,confidence,bbox,eight_steps,diagnosis,wrong_question_id,review_required,created_at)
-                    values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (qid,paper_id,question.get("page_id"),str(question.get("question_no") or index),question.get("printed_text") or "",question.get("student_work") or "",question.get("teacher_marks") or "",state,question.get("score"),question.get("max_score"),confidence,json.dumps(question.get("bbox"),ensure_ascii=False),json.dumps(steps,ensure_ascii=False),json.dumps(diagnosis,ensure_ascii=False),wrong_id,1 if review_required else 0,now_iso()),
-                )
-                progress = 45 + round(index / max(1, len(extracted)) * 50)
-                conn.execute("update exam_papers set progress=?,updated_at=? where id=?", (progress, now_iso(), paper_id))
-                conn.execute("update paper_jobs set progress=?,updated_at=? where paper_id=?", (progress, now_iso(), paper_id))
-        with db() as conn:
-            rows = [row_to_dict(r) for r in conn.execute("select * from paper_questions where paper_id=?", (paper_id,)).fetchall()]
-            summary = paper_summary(rows)
-            matched = 0
-            for row in rows:
-                diag = json.loads(row.get("diagnosis") or "{}") if not isinstance(row.get("diagnosis"), dict) else row.get("diagnosis")
-                if diag.get("mother_question"):
-                    matched += 1
-            summary["mother_matched_count"] = matched
-            summary["knowledge_card_count"] = sum(1 for row in rows if row.get("answer_state") != "correct")
-            conn.execute("update exam_papers set status='completed',summary=?,progress=100,updated_at=? where id=?", (json.dumps(summary,ensure_ascii=False),now_iso(),paper_id))
-            conn.execute("update paper_jobs set status='completed',progress=100,message='分析完成',updated_at=? where paper_id=?", (now_iso(),paper_id))
-    except Exception as exc:
-        with db() as conn:
-            conn.execute("update exam_papers set status='failed',error=?,updated_at=? where id=?", (str(exc),now_iso(),paper_id))
-            conn.execute("update paper_jobs set status='failed',message=?,updated_at=? where paper_id=?", (str(exc),now_iso(),paper_id))
+            model = get_model(conn, model_id)
+        user_text = f"""学科：{subject}
+原题：{question_text}
+学生错答/卡点：{wrong_answer or "未提供"}
+核心题型：{core}
+错因摘要：{(diagnosis.get("student_answer_analysis") or {}).get("likely_issue") or "待核对"}
+
+请生成 3 道由易到难的「消灭训练题」（同型巩固 / 轻微变式 / 综合迁移），JSON 格式：
+{{"practice_variants":[{{"level":1,"title":"同型巩固","stem":"...","answer":"...","analysis":"..."}}, ...]}}"""
+        raw = minimax_chat(model, [{"role": "user", "content": user_text}], max_tokens=2200, temperature=0.25)
+        parsed = extract_json(raw)
+        variants = parsed.get("practice_variants") or []
+        if len(variants) >= 2:
+            return variants[:3]
+    except Exception:
+        pass
+    return fallback
+
+
+def process_paper_job(paper_id: str, model_id: str | None = None) -> None:
+    import paper_speed
+
+    paper_speed.process_paper_job(sys.modules[__name__], paper_id, model_id)
 
 
 def build_paper_docx(paper: dict) -> bytes:
@@ -3980,7 +4593,7 @@ class AppHandler(BaseHTTPRequestHandler):
         user = current_user_from_request(conn, self.headers)
         if user_is_admin(user):
             return True
-        self.send_json({"error": "éœ€è¦ç®¡ç†å‘˜è´¦å·ç™»å½•åŽè®¿é—®åŽå°é…ç½®ã€‚"}, 403)
+        self.send_json({"error": "需要管理员账号登录后访问后台配置。"}, 403)
         return False
 
     def end_headers(self) -> None:
@@ -4032,6 +4645,19 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_sse(self, event: str, payload: dict) -> None:
+        chunk = f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+        self.wfile.write(chunk)
+        self.wfile.flush()
+
+    def begin_sse(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
     def send_bytes(self, body: bytes, content_type: str, filename: str) -> None:
         self.send_response(200)
         self.send_header("Content-Type", content_type)
@@ -4070,6 +4696,12 @@ class AppHandler(BaseHTTPRequestHandler):
                         self.send_json({"error": "真题库尚未导入"}, 404); return
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                     self.send_json(manifest)
+                    return
+                if path == "/api/gaokao-zone/stats":
+                    self.send_json(zone_stats(conn, ZONE_GAOKAO_MATH))
+                    return
+                if path == "/api/gaokao-zone/documents":
+                    self.send_json({"documents": list_documents(conn, ZONE_GAOKAO_MATH)})
                     return
                 if path == "/api/agent/layers":
                     self.send_json(AGENT_LAYERS)
@@ -4111,7 +4743,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 if path == "/api/rag/search":
                     q = (query.get("q") or [""])[0]
-                    subject = (query.get("subject") or ["è‡ªåŠ¨è¯†åˆ«"])[0]
+                    subject = (query.get("subject") or ["自动识别"])[0]
                     limit = int((query.get("limit") or [5])[0])
                     self.send_json(search_rag(conn, q, subject, user, limit))
                     return
@@ -4217,8 +4849,39 @@ class AppHandler(BaseHTTPRequestHandler):
                     ).fetchall()
                     self.send_json([row_to_dict(row) for row in rows])
                     return
+                if path == "/api/checkins/today":
+                    if not user:
+                        self.send_json({"error": "请先登录后选择身份"}, 401)
+                        return
+                    self.send_json(checkin_dashboard(conn, user))
+                    return
+                if path == "/api/question-method-packages/stats":
+                    total = conn.execute("select count(*) c from question_method_packages").fetchone()["c"]
+                    source_total = conn.execute("select count(*) c from gaokao_questions").fetchone()["c"]
+                    self.send_json({"packages": int(total or 0), "source_questions": int(source_total or 0)})
+                    return
                 if path == "/api/report":
                     self.send_json(build_report(conn, user))
+                    return
+                if path == "/api/teacher/classes":
+                    user_id = user["id"] if user else None
+                    self.send_json({"classes": teacher_portal.list_classes(conn, user_id)})
+                    return
+                if path == "/api/teacher/review-queue":
+                    user_id = user["id"] if user else None
+                    limit = int((query.get("limit") or ["50"])[0])
+                    items = teacher_portal.review_queue(conn, user_id, limit=limit)
+                    self.send_json({"items": items, "count": len(items)})
+                    return
+                if path == "/api/teacher/review-queue/export":
+                    user_id = user["id"] if user else None
+                    items = teacher_portal.review_queue(conn, user_id, limit=100)
+                    text = teacher_portal.review_export_text(items)
+                    self.send_json({"markdown": text, "count": len(items)})
+                    return
+                if path == "/api/parent/weekly-report":
+                    user_id = user["id"] if user else None
+                    self.send_json(parent_report.build_weekly_report(conn, user_id))
                     return
                 if path == "/api/profile":
                     self.send_json(profile_items(conn, user))
@@ -4377,7 +5040,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 data = self.read_json()
                 with db() as conn:
                     user = current_user_from_request(conn, self.headers)
-                    result = search_rag(conn, data.get("query") or "", data.get("subject") or "è‡ªåŠ¨è¯†åˆ«", user, int(data.get("limit") or 5))
+                    result = search_rag(conn, data.get("query") or "", data.get("subject") or "自动识别", user, int(data.get("limit") or 5))
                 self.send_json(result)
                 return
             if path == "/api/rag/generate-quiz":
@@ -4485,8 +5148,15 @@ class AppHandler(BaseHTTPRequestHandler):
             if path == "/api/ocr":
                 data = self.read_json()
                 image_data_url = data.get("image_data_url")
+                handwriting = bool(data.get("handwriting")) or bool(data.get("handwriting_mode"))
                 image_url = save_data_url(image_data_url)
-                result = run_ocr(image_data_url, data.get("model_id"))
+                result = run_ocr(image_data_url, data.get("model_id"), handwriting=handwriting)
+                cleaned_question = deduplicate_repeated_ocr_text(result.get("printed_question") or result.get("ocr_text") or "")
+                result["printed_question"] = cleaned_question
+                result["ocr_text"] = deduplicate_repeated_ocr_text(result.get("ocr_text") or cleaned_question)
+                questions = split_numbered_questions(cleaned_question)
+                result["questions"] = questions if len(questions) > 1 else []
+                result["question_count"] = max(1, len(questions))
                 result["image_url"] = image_url
                 self.send_json(result, 201)
                 return
@@ -4500,6 +5170,116 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/diagnose":
                 self.create_diagnosis()
+                return
+            if path == "/api/diagnose/stream":
+                self.create_diagnosis_stream()
+                return
+            if path == "/api/diagnose/enrich":
+                data = self.read_json()
+                text = (data.get("question_text") or "").strip()
+                wrong_answer = (data.get("student_wrong_answer") or "").strip()
+                if not text:
+                    self.send_json({"error": "question_text is required"}, 400)
+                    return
+                subject = data.get("subject") or "自动识别"
+                with db() as conn:
+                    rag_hits, rag_context = retrieve_gaokao_evidence(conn, text, subject)
+                diagnosis = quick_diagnose_with_llm(
+                    text,
+                    wrong_answer,
+                    (data.get("ocr_text") or "").strip(),
+                    data.get("model_id"),
+                    subject,
+                    rag_context,
+                )
+                diagnosis["practice_variants"] = generate_eliminate_variants(
+                    text, wrong_answer, diagnosis, data.get("model_id"), subject, use_llm=False
+                )
+                self.send_json({"diagnosis": diagnosis, "mode": "enriched_llm"}, 201)
+                return
+            if path == "/api/teacher/classes":
+                data = self.read_json()
+                with db() as conn:
+                    user = current_user_from_request(conn, self.headers)
+                    user_id = user["id"] if user else None
+                    item = teacher_portal.create_class(conn, user_id, data)
+                self.send_json(item, 201)
+                return
+            if path in {"/api/checkins/profile", "/api/checkins/tasks", "/api/checkins/submit"}:
+                data = self.read_json()
+                with db() as conn:
+                    user = current_user_from_request(conn, self.headers)
+                    if not user:
+                        self.send_json({"error": "请先登录后操作打卡"}, 401)
+                        return
+                    if path == "/api/checkins/profile":
+                        result = save_learning_profile(conn, user, data)
+                    elif path == "/api/checkins/tasks":
+                        result = create_checkin_task(conn, user, data)
+                    else:
+                        result = submit_checkin_task(conn, user, data)
+                self.send_json(result, 201)
+                return
+            if path == "/api/search/questions":
+                data = self.read_json()
+                query = (data.get("query") or data.get("question_text") or "").strip()
+                if not query:
+                    self.send_json({"error": "请提供需要深拆的题目文本"}, 400)
+                    return
+                with db() as conn:
+                    merged = merge_gaokao_search_results(
+                        conn,
+                        query,
+                        zone=data.get("zone") or ZONE_GAOKAO_MATH,
+                        limit=int(data.get("limit") or 8),
+                    )
+                self.send_json(
+                    {
+                        "mode": "search",
+                        "hits": merged["bank_hits"],
+                        "count": len(merged["bank_hits"]),
+                        "rag_hits": merged["rag_hits"],
+                        "rag_count": len(merged["rag_hits"]),
+                        "citations": merged["citations"],
+                        "rag_context_preview": compact_text(merged["rag_context"], 600),
+                    }
+                )
+                return
+            if path == "/api/gaokao-zone/sync-rag":
+                data = self.read_json()
+                with db() as conn:
+                    if not self.require_admin(conn):
+                        return
+                    result = gaokao_rag.sync_all_gaokao_to_rag(conn, rebuild=data.get("rebuild", True) is not False)
+                self.send_json(result, 201)
+                return
+            if path == "/api/gaokao-zone/upload":
+                data = self.read_json()
+                filename = (data.get("filename") or "upload.pdf").strip()
+                data_url = data.get("data_url") or data.get("file_data_url") or ""
+                if not data_url:
+                    self.send_json({"error": "请上传 PDF 文件"}, 400)
+                    return
+                header, content = decode_data_url(data_url)
+                if "pdf" not in header.lower() and not filename.lower().endswith(".pdf"):
+                    self.send_json({"error": "目前专区导入仅支持 PDF"}, 400)
+                    return
+                upload_path = UPLOAD_DIR / f"gaokao-{uuid.uuid4().hex[:10]}-{Path(filename).name}"
+                upload_path.write_bytes(content)
+                doc_type = gaokao_import.guess_doc_type(filename)
+                try:
+                    with db() as conn:
+                        result = gaokao_import.import_pdf_file(
+                            conn,
+                            upload_path,
+                            public_dir=PUBLIC_DIR,
+                            doc_type=doc_type,
+                            title=data.get("title") or Path(filename).stem,
+                            also_rag=True,
+                        )
+                    self.send_json(result, 201)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 500)
                 return
             match = re.fullmatch(r"/api/wrong-questions/([^/]+)/variants", path)
             if match:
@@ -4562,8 +5342,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         """,
                         (
                             export_id,
-                            result.get("filename") or "ä¸ªäººå­¦ä¹ æ¡£æ¡ˆ.md",
-                            data.get("subject") or "å…¨éƒ¨å­¦ç§‘",
+                            result.get("filename") or "个人学习档案.md",
+                            data.get("subject") or "全部学科",
                             result.get("markdown") or "",
                             int(result.get("count") or 0),
                             user_id,
@@ -4583,20 +5363,20 @@ class AppHandler(BaseHTTPRequestHandler):
         email = (data.get("email") or "").strip().lower()
         password = data.get("password") or ""
         if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-            self.send_json({"error": "è¯·è¾“å…¥æœ‰æ•ˆé‚®ç®±"}, 400)
+            self.send_json({"error": "请输入有效邮箱"}, 400)
             return
         if email == ADMIN_EMAIL:
-            self.send_json({"error": "è¯¥é‚®ç®±ä¸ºç³»ç»Ÿç®¡ç†å‘˜è´¦å·ï¼Œè¯·ç›´æŽ¥ç™»å½•"}, 409)
+            self.send_json({"error": "该邮箱为系统管理员账号，请直接登录"}, 409)
             return
         if len(password) < 6:
-            self.send_json({"error": "å¯†ç è‡³å°‘ 6 ä½"}, 400)
+            self.send_json({"error": "密码至少 6 位"}, 400)
             return
         user_id = str(uuid.uuid4())
         token = secrets.token_urlsafe(32)
         with db() as conn:
             exists = conn.execute("select id from app_users where email = ?", (email,)).fetchone()
             if exists:
-                self.send_json({"error": "é‚®ç®±å·²æ³¨å†Œï¼Œè¯·ç›´æŽ¥ç™»å½•"}, 409)
+                self.send_json({"error": "邮箱已注册，请直接登录"}, 409)
                 return
             conn.execute(
                 "insert into app_users (id, email, password_hash, credits, created_at) values (?, ?, ?, ?, ?)",
@@ -4616,7 +5396,7 @@ class AppHandler(BaseHTTPRequestHandler):
         with db() as conn:
             row = conn.execute("select * from app_users where email = ?", (email,)).fetchone()
             if not row or not verify_password(password, row["password_hash"]):
-                self.send_json({"error": "é‚®ç®±æˆ–å¯†ç é”™è¯¯"}, 401)
+                self.send_json({"error": "邮箱或密码错误"}, 401)
                 return
             token = secrets.token_urlsafe(32)
             conn.execute(
@@ -4631,15 +5411,15 @@ class AppHandler(BaseHTTPRequestHandler):
         with db() as conn:
             user = current_user_from_request(conn, self.headers)
             if not user:
-                self.send_json({"error": "è¯·å…ˆç™»å½•åŽå†å…‘æ¢ç§¯åˆ†"}, 401)
+                self.send_json({"error": "请先登录后再兑换积分"}, 401)
                 return
             row = conn.execute("select * from redeem_codes where code = ?", (code,)).fetchone()
             if not row:
-                self.send_json({"error": "å…‘æ¢ç ä¸å­˜åœ¨"}, 404)
+                self.send_json({"error": "兑换码不存在"}, 404)
                 return
             reusable_demo = code == "DEMO2026"
             if row["is_used"] and not reusable_demo:
-                self.send_json({"error": "å…‘æ¢ç å·²ä½¿ç”¨"}, 409)
+                self.send_json({"error": "兑换码已使用"}, 409)
                 return
             if not reusable_demo:
                 conn.execute(
@@ -4711,7 +5491,7 @@ class AppHandler(BaseHTTPRequestHandler):
     def save_image_model(self) -> None:
         data = self.read_json()
         model_id = data.get("id") or str(uuid.uuid4())
-        name = data.get("name") or "OpenAI GPT Image å¡ç‰‡ç”Ÿæˆ"
+        name = data.get("name") or "OpenAI GPT Image 卡片生成"
         provider = data.get("provider") or "openai"
         endpoint = data.get("endpoint") or OPENAI_IMAGE_ENDPOINT
         model = data.get("model") or DEFAULT_OPENAI_IMAGE_MODEL
@@ -4766,26 +5546,154 @@ class AppHandler(BaseHTTPRequestHandler):
             row = conn.execute("select * from image_model_configs where id = ?", (model_id,)).fetchone()
         self.send_json(public_image_model(row), 201)
 
-    def create_diagnosis(self) -> None:
+    def create_diagnosis_stream(self) -> None:
         data = self.read_json()
         text = (data.get("question_text") or "").strip()
         if not text:
             self.send_json({"error": "question_text is required"}, 400)
             return
+        subject = data.get("subject") or "自动识别"
+        wrong_answer = (data.get("student_wrong_answer") or "").strip()
+        model_id = data.get("model_id")
+        self.begin_sse()
+        try:
+            question_parts = split_numbered_questions(deduplicate_repeated_ocr_text(text))
+            if len(question_parts) > 1:
+                question_parts = question_parts[:10]
+                self.send_sse("batch_detected", {"count": len(question_parts), "label": f"识别到 {len(question_parts)} 道题，将逐题进行 RAG 深拆"})
+                items = []
+                for index, question in enumerate(question_parts, start=1):
+                    question_text = str(question.get("printed_text") or "").strip()
+                    self.send_sse("question_start", {"index": index, "count": len(question_parts), "question_no": question.get("question_no"), "label": f"正在拆解第 {index}/{len(question_parts)} 题"})
+                    instant = build_instant_diagnosis(question_text, wrong_answer, subject, [], [])
+                    self.send_sse("partial", {"step": "instant", "index": index, "count": len(question_parts), "core_pattern": instant.get("core_pattern"), "subject": instant.get("subject"), "steps": (instant.get("decomposition") or {}).get("step_formulas") or [], "show_result": True})
+                    with db() as conn:
+                        merged = merge_gaokao_search_results(conn, question_text, limit=int(data.get("limit") or 6))
+                    rag_hits = merged["rag_hits"]
+                    self.send_sse("rag_hit", {"index": index, "count": len(rag_hits), "hits": rag_hits[:5], "bank_hits": merged["bank_hits"][:5], "method_packages": (merged.get("method_packages") or [])[:5]})
+                    deep_data = {**data, "question_text": question_text, "ocr_text": question_text, "mode": "deep", "skip_search": False}
+                    item = self._build_diagnosis_record(deep_data, question_text, rag_hits=rag_hits, rag_context=merged.get("rag_context") or "")
+                    items.append(item)
+                    self.send_sse("question_done", {"index": index, "count": len(question_parts), "question_no": question.get("question_no"), "id": item.get("id"), "core_pattern": (item.get("diagnosis") or {}).get("core_pattern")})
+                self.send_sse("done", {"mode": "deep-batch", "item": items[0], "items": items, "question_count": len(items), "fast_path": False})
+                return
+            # 首段正文绝不等待数据库或模型；客户端应在 1–2 秒内看到可读分析，而不只是进度提示。
+            self.send_sse("phase", {"step": "accepted", "label": "题目已接收，正在识别题型并检索知识库…"})
+            instant = build_instant_diagnosis(text, wrong_answer, subject, [], [])
+            self.send_sse(
+                "partial",
+                {
+                    "step": "instant",
+                    "core_pattern": instant.get("core_pattern"),
+                    "subject": instant.get("subject"),
+                    "steps": (instant.get("decomposition") or {}).get("step_formulas") or [],
+                    "show_result": True,
+                },
+            )
+            with db() as conn:
+                merged = merge_gaokao_search_results(conn, text, limit=int(data.get("limit") or 6))
+            hits = merged["bank_hits"]
+            rag_hits = merged["rag_hits"]
+            method_packages = merged.get("method_packages") or []
+            rag_context = merged.get("rag_context") or ""
+            self.send_sse("phase", {"step": "rag", "label": f"已匹配 {len(hits)} 道母题、{len(rag_hits)} 条知识证据和 {len(method_packages)} 个方法包…"})
+            if rag_hits or method_packages or hits:
+                self.send_sse(
+                    "rag_hit",
+                    {
+                        "hits": rag_hits[:5],
+                        "count": len(rag_hits),
+                        "bank_hits": hits[:5],
+                        "method_packages": method_packages[:5],
+                        "citations": gaokao_rag.rag_citations_from_hits(rag_hits[:5]),
+                    },
+                )
+            skeleton = build_instant_diagnosis(text, wrong_answer, subject, hits, rag_hits)
+            self.send_sse("partial", {"step": "pattern", "core_pattern": skeleton.get("core_pattern"), "subject": skeleton.get("subject"), "steps": (skeleton.get("decomposition") or {}).get("step_formulas") or [], "show_result": True})
+            self.send_sse("phase", {"step": "deep", "label": "正在结合母题、方法包与知识证据完成八步深拆…"})
+            deep_data = {**data, "mode": "deep", "skip_search": False}
+            item = self._build_diagnosis_record(deep_data, text, rag_hits=rag_hits, rag_context=rag_context)
+            self.send_sse(
+                "partial",
+                {
+                    "step": "crush",
+                    "core_pattern": (item.get("diagnosis") or {}).get("core_pattern"),
+                    "subject": (item.get("diagnosis") or {}).get("subject"),
+                },
+            )
+            self.send_sse("done", {"mode": "deep", "item": item, "fast_path": False, "hits": hits[:5], "rag_hits": rag_hits[:5], "method_packages": method_packages[:5]})
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return
+        except Exception as exc:
+            self.send_sse("error", {"error": str(exc)})
+
+    def _build_diagnosis_record(
+        self,
+        data: dict,
+        text: str,
+        *,
+        rag_hits: list[dict] | None = None,
+        rag_context: str = "",
+        prebuilt_diagnosis: dict | None = None,
+    ) -> dict:
         image_url = save_data_url(data.get("image_data_url"))
         wrong_answer = (data.get("student_wrong_answer") or "").strip()
         ocr_text = (data.get("ocr_text") or "").strip()
         model_id = data.get("model_id")
-        subject = data.get("subject") or "è‡ªåŠ¨è¯†åˆ«"
-        diagnosis = diagnose_with_llm(text, wrong_answer, ocr_text, model_id, subject)
+        subject = data.get("subject") or "自动识别"
+        if rag_hits is None or not rag_context:
+            with db() as conn:
+                rag_hits, rag_context = retrieve_gaokao_evidence(conn, text, subject)
+        if prebuilt_diagnosis is not None:
+            diagnosis = dict(prebuilt_diagnosis)
+        elif (data.get("mode") or "auto").strip().lower() == "deep":
+            diagnosis = diagnose_with_llm(text, wrong_answer, ocr_text, model_id, subject, rag_context=rag_context)
+        else:
+            with db() as conn:
+                merged = merge_gaokao_search_results(conn, text, limit=6)
+            diagnosis = build_instant_diagnosis(
+                text, wrong_answer, subject, merged["bank_hits"], merged["rag_hits"]
+            )
+        diagnosis.setdefault(
+            "gaokao_rag",
+            {
+                "used": bool(rag_hits),
+                "evidence_count": len(rag_hits or []),
+                "citations": gaokao_rag.rag_citations_from_hits(rag_hits or []),
+                "how_used": "已作为拆题优先依据注入提示词" if rag_hits else "未命中母题库 RAG",
+            },
+        )
         answer_analysis = diagnosis.setdefault("student_answer_analysis", {})
+        if wrong_answer and not str(answer_analysis.get("extracted_work") or "").strip():
+            answer_analysis["extracted_work"] = wrong_answer
+            answer_analysis["answer_presence"] = "已提供"
         error_type = normalize_error_type(answer_analysis.get("error_type") or answer_analysis.get("likely_issue"))
         answer_analysis["error_type"] = error_type
+        diagnosis["answer_verdict"] = build_answer_verdict(text, wrong_answer, diagnosis)
+        if not (diagnosis.get("practice_variants") or []):
+            use_llm = (data.get("mode") or "auto").strip().lower() == "deep"
+            diagnosis["practice_variants"] = generate_eliminate_variants(
+                text, wrong_answer, diagnosis, model_id, subject, use_llm=use_llm
+            )
+        # Prefer 5 consolidate items for the guided eighth step.
+        while len(diagnosis.get("practice_variants") or []) < 5:
+            base = list(diagnosis.get("practice_variants") or [])
+            extras = generate_eliminate_variants(
+                text, wrong_answer, diagnosis, model_id, subject, use_llm=False
+            )
+            for extra in extras:
+                if len(diagnosis["practice_variants"]) >= 5:
+                    break
+                diagnosis["practice_variants"].append(extra)
+            if len(diagnosis["practice_variants"]) == len(base):
+                break
+        diagnosis["practice_variants"] = (diagnosis.get("practice_variants") or [])[:5]
         for index, variant in enumerate(diagnosis.get("practice_variants") or [], start=1):
             variant["tier"] = practice_tier(index)
         wrong_id = str(uuid.uuid4())
         confidence = float(diagnosis.get("confidence") or 0.75)
         status = "review_needed" if diagnosis.get("needs_review") else "diagnosed"
+        saved_variants: list[dict] = []
         with db() as conn:
             user = current_user_from_request(conn, self.headers)
             user_id = user["id"] if user else None
@@ -4818,32 +5726,28 @@ class AppHandler(BaseHTTPRequestHandler):
                     now_iso(),
                 ),
             )
-            save_variants(conn, wrong_id, diagnosis)
+            saved_variants = save_variants(conn, wrong_id, diagnosis)
             reserved = diagnosis.get("mother_question_reserved") or {}
-            if reserved.get("name"):
-                conn.execute(
-                    """
-                    insert into mother_questions (id, code, name, status, metadata, created_at)
-                    values (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        f"MQ-{wrong_id[:8]}",
-                        reserved.get("name") or "é¢˜åž‹åŽŸåž‹",
-                        "auto_from_diagnosis",
-                        json.dumps(
-                            {
-                                "wrong_question_id": wrong_id,
-                                "abstract_pattern": reserved.get("abstract_pattern"),
-                                "recognition_signals": reserved.get("recognition_signals"),
-                                "subject": diagnosis.get("subject"),
-                            },
-                            ensure_ascii=False,
-                        ),
-                        now_iso(),
-                    ),
-                )
-            item = get_wrong_question(conn, wrong_id)
+            try:
+                insert_reserved_mother_question(conn, wrong_id, reserved, diagnosis)
+            except Exception:
+                pass
+            row = conn.execute("select * from wrong_questions where id = ?", (wrong_id,)).fetchone()
+        item = row_to_dict(row)
+        item["diagnosis"] = diagnosis
+        item["variants"] = saved_variants
+        return item
+
+    def create_diagnosis(self) -> None:
+        data = self.read_json()
+        text = (data.get("question_text") or "").strip()
+        if not text:
+            self.send_json({"error": "question_text is required"}, 400)
+            return
+        with db() as conn:
+            merged = merge_gaokao_search_results(conn, text, limit=6)
+        deep_data = {**data, "mode": "deep", "skip_search": False}
+        item = self._build_diagnosis_record(deep_data, text, rag_hits=merged["rag_hits"], rag_context=merged.get("rag_context") or "")
         self.send_json(item, 201)
 
     def grade_answer(self, variant_id: str) -> None:
@@ -4883,31 +5787,43 @@ class AppHandler(BaseHTTPRequestHandler):
         data = self.read_json()
         item_id = str(uuid.uuid4())
         with db() as conn:
-            conn.execute(
-                """
-                insert into mother_questions (id, code, name, status, metadata, created_at)
-                values (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item_id,
-                    data.get("code") or f"RES-{item_id[:8]}",
-                    data.get("name") or "é¢„ç•™æ¯é¢˜",
-                    "reserved",
-                    json.dumps(data.get("metadata") or {}, ensure_ascii=False),
-                    now_iso(),
-                ),
+            insert_reserved_mother_question(
+                conn,
+                item_id,
+                {
+                    "code": data.get("code") or f"RES-{item_id[:8]}",
+                    "name": data.get("name") or "预留母题",
+                    "status": "reserved",
+                    **(data.get("metadata") or {}),
+                },
+                {"core_pattern": data.get("topic") or data.get("name") or "预留母题"},
             )
-            row = conn.execute("select * from mother_questions where id = ?", (item_id,)).fetchone()
+            row = conn.execute(
+                "select * from mother_questions where code = ? order by created_at desc limit 1",
+                (data.get("code") or f"RES-{item_id[:8]}",),
+            ).fetchone()
+            if not row:
+                self.send_json({"error": "创建母题失败"}, 500)
+                return
         self.send_json(row_to_dict(row), 201)
 
     def serve_static(self, path: str) -> None:
         if path == "/":
             path = "/index.html"
+        if path in {"/investor", "/investors", "/investor/", "/investors/"}:
+            path = "/investors.html"
         if path == "/org":
             path = "/org.html"
         if path == "/org-admin":
             path = "/org-admin.html"
-        if re.fullmatch(r"/tools/[a-z0-9-]+/?", path):
+        # SPA routes for nav + 22 tool workbenches
+        spa_paths = {
+            "/paper-analysis", "/wrong-analysis", "/agent", "/gaokao-math",
+            "/wrongbook", "/learning-report", "/history", "/workbenches",
+            "/profile", "/mother-questions", "/admin",
+        }
+        normalized = path.rstrip("/") or "/"
+        if normalized in spa_paths or re.fullmatch(r"/tools/[a-z0-9-]+/?", path):
             path = "/index.html"
         safe_path = path.lstrip("/").replace("..", "")
         file_path = PUBLIC_DIR / safe_path
@@ -4957,7 +5873,7 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8021"))
     server = ThreadingHTTPServer((host, port), AppHandler)
-    print(f"AIé”™é¢˜æ‹†åšå£«å·²å¯åŠ¨: http://{host}:{port}")
+    print(f"AI错题拆博士已启动: http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
